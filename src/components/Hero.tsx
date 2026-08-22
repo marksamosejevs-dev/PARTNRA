@@ -30,25 +30,6 @@ export function Hero() {
                 Then recruit them for your brand.
               </p>
             </Reveal>
-
-            <HeroProcessFlow />
-
-            <Reveal delay={0.66}>
-              <div className="mt-10 flex flex-wrap items-center gap-x-8 gap-y-4">
-                <Button href="#audit" variant="secondary" size="lg" className="w-full sm:w-auto">
-                  Find my affiliates
-                </Button>
-                <Button href="#how-it-works" variant="ghost" arrow={false}>
-                  See how it works
-                </Button>
-              </div>
-            </Reveal>
-
-            <Reveal delay={0.76}>
-              <p className="mt-8 text-sm font-medium text-ink/55">
-                No new affiliate network. Keep your existing programme.
-              </p>
-            </Reveal>
           </div>
 
           <div className="flex items-start justify-start lg:justify-end lg:pt-4">
@@ -56,6 +37,27 @@ export function Hero() {
               <AffiliateFlow />
             </Reveal>
           </div>
+        </div>
+
+        <div className="mx-auto mt-14 max-w-4xl md:mt-20">
+          <HeroProcessFlow />
+
+          <Reveal delay={0.66}>
+            <div className="mt-10 flex flex-wrap items-center justify-center gap-x-8 gap-y-4">
+              <Button href="#audit" variant="secondary" size="lg" className="w-full sm:w-auto">
+                Find my affiliates
+              </Button>
+              <Button href="#how-it-works" variant="ghost" arrow={false}>
+                See how it works
+              </Button>
+            </div>
+          </Reveal>
+
+          <Reveal delay={0.76}>
+            <p className="mt-8 text-center text-sm font-medium text-ink/55">
+              No new affiliate network. Keep your existing programme.
+            </p>
+          </Reveal>
         </div>
       </Container>
     </section>
