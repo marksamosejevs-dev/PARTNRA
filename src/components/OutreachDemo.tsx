@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import clsx from "clsx";
 import { Container } from "./ui/Container";
 import { Reveal } from "./ui/Reveal";
 
@@ -26,7 +27,13 @@ The programme currently offers:
 
 Would you be interested in taking a look?`;
 
-type Status = "approve" | "skip" | null;
+type Status = "approve" | "edit" | "skip" | null;
+
+const STATUS_COPY: Record<Exclude<Status, null>, string> = {
+  approve: "Draft approved. It's queued for you to send from your own inbox.",
+  edit: "Editing draft — make your changes, then approve to queue it.",
+  skip: "Skipped. Alex moves to the next prospect.",
+};
 
 export function OutreachDemo() {
   const [status, setStatus] = useState<Status>(null);
@@ -83,16 +90,34 @@ export function OutreachDemo() {
               <div className="flex gap-2">
                 <button
                   onClick={() => setStatus("approve")}
-                  className="rounded-full bg-lime px-4 py-2 text-sm font-semibold text-ink hover:opacity-85"
+                  className={clsx(
+                    "rounded-full px-4 py-2 text-sm font-semibold transition-all duration-200 active:scale-[0.97]",
+                    status === "approve"
+                      ? "bg-lime text-ink shadow-[0_0_20px_2px_rgba(199,255,53,0.4)]"
+                      : "border border-ink/15 text-ink/70 hover:border-lime hover:text-ink"
+                  )}
                 >
                   Approve
                 </button>
-                <button className="rounded-full border border-ink/15 px-4 py-2 text-sm font-semibold text-ink/70 hover:border-ink/30">
+                <button
+                  onClick={() => setStatus("edit")}
+                  className={clsx(
+                    "rounded-full px-4 py-2 text-sm font-semibold transition-all duration-200 active:scale-[0.97]",
+                    status === "edit"
+                      ? "bg-lime text-ink shadow-[0_0_20px_2px_rgba(199,255,53,0.4)]"
+                      : "border border-ink/15 text-ink/70 hover:border-lime hover:text-ink"
+                  )}
+                >
                   Edit
                 </button>
                 <button
                   onClick={() => setStatus("skip")}
-                  className="rounded-full border border-ink/15 px-4 py-2 text-sm font-semibold text-ink/50 hover:border-ink/30"
+                  className={clsx(
+                    "rounded-full px-4 py-2 text-sm font-semibold transition-all duration-200 active:scale-[0.97]",
+                    status === "skip"
+                      ? "bg-lime text-ink shadow-[0_0_20px_2px_rgba(199,255,53,0.4)]"
+                      : "border border-ink/15 text-ink/50 hover:border-lime hover:text-ink"
+                  )}
                 >
                   Skip
                 </button>
@@ -101,9 +126,7 @@ export function OutreachDemo() {
 
             {status && (
               <div className="mt-4 rounded-xl bg-surface px-4 py-3 text-sm text-ink/60">
-                {status === "approve"
-                  ? "Draft approved. It's queued for you to send from your own inbox."
-                  : "Skipped. Alex moves to the next prospect."}
+                {STATUS_COPY[status]}
               </div>
             )}
           </Reveal>
