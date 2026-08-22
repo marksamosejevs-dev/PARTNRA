@@ -46,7 +46,7 @@ export function HowItWorks() {
     <section id="how-it-works" className="scroll-mt-24 border-t border-ink/10 py-24 md:py-36">
       <Container>
         <Reveal>
-          <SectionLabel>05 / The system</SectionLabel>
+          <SectionLabel>The system</SectionLabel>
         </Reveal>
 
         <div className="mt-10 flex flex-col">

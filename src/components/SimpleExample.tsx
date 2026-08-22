@@ -7,7 +7,7 @@ export function SimpleExample() {
     <section className="py-24 md:py-36">
       <Container>
         <Reveal>
-          <SectionLabel>01 / A simple example</SectionLabel>
+          <SectionLabel>A simple example</SectionLabel>
         </Reveal>
 
         <Reveal delay={0.06}>

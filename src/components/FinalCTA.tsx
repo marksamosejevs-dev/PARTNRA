@@ -18,7 +18,7 @@ export function FinalCTA() {
             </p>
           </Reveal>
           <Reveal delay={0.2} className="mt-12 flex justify-center">
-            <Button href="#audit" variant="secondary" className="!px-8 !py-4 text-base">
+            <Button href="#audit" variant="secondary" size="lg">
               Find them
             </Button>
           </Reveal>

@@ -7,7 +7,7 @@ export function MeetAlex() {
     <div className="pt-24 pb-16 md:pt-32 md:pb-20">
       <Container>
         <Reveal>
-          <SectionLabel tone="paper">04 / AI Affiliate Manager</SectionLabel>
+          <SectionLabel tone="paper">AI Affiliate Manager</SectionLabel>
         </Reveal>
 
         <Reveal delay={0.06}>

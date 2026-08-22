@@ -7,7 +7,7 @@ export function Problem() {
     <section className="py-24 md:py-36">
       <Container>
         <Reveal>
-          <SectionLabel>02 / The problem</SectionLabel>
+          <SectionLabel>The problem</SectionLabel>
         </Reveal>
 
         <Reveal delay={0.06}>

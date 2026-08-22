@@ -40,7 +40,7 @@ export function Hero() {
 
             <Reveal delay={0.32}>
               <div className="mt-10 flex flex-wrap items-center gap-x-8 gap-y-4">
-                <Button href="#audit" variant="secondary">
+                <Button href="#audit" variant="secondary" size="lg" className="w-full sm:w-auto">
                   Find my affiliates
                 </Button>
                 <Button href="#how-it-works" variant="ghost" arrow={false}>

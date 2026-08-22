@@ -3,20 +3,21 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
-import { Logo, LogoIcon } from "./ui/Logo";
+import { Logo } from "./ui/Logo";
 import { Button } from "./ui/Button";
 import { Container } from "./ui/Container";
 
 const NAV = [
-  { label: "Product", href: "#product" },
-  { label: "Alex", href: "#alex" },
-  { label: "How it works", href: "#how-it-works" },
-  { label: "Pilot", href: "#pilot" },
+  { label: "Product", href: "#product", id: "product" },
+  { label: "Alex", href: "#alex", id: "alex" },
+  { label: "How it works", href: "#how-it-works", id: "how-it-works" },
+  { label: "Pilot", href: "#pilot", id: "pilot" },
 ];
 
 export function Header() {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 12);
@@ -32,37 +33,76 @@ export function Header() {
     };
   }, [menuOpen]);
 
+  useEffect(() => {
+    const sections = NAV.map((item) => document.getElementById(item.id)).filter(
+      (el): el is HTMLElement => el !== null
+    );
+    if (sections.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const intersecting = entries.filter((entry) => entry.isIntersecting);
+        if (intersecting.length === 0) return;
+        // Prefer the section closest to the top of the scrollspy band —
+        // i.e. the one whose top edge is highest (least negative/most positive).
+        const top = intersecting.reduce((best, entry) =>
+          entry.boundingClientRect.top > best.boundingClientRect.top ? entry : best
+        );
+        setActiveId(top.target.id);
+      },
+      { rootMargin: "-112px 0px -75% 0px", threshold: 0 }
+    );
+
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <header
       className={clsx(
         "fixed inset-x-0 top-0 z-50 transition-all duration-300",
         scrolled || menuOpen
-          ? "border-b border-ink/10 bg-paper/85 backdrop-blur-md"
+          ? "border-b border-ink/10 bg-paper/90 backdrop-blur-md"
           : "border-b border-transparent bg-transparent"
       )}
     >
       <Container>
-        <div className="flex h-16 items-center justify-between md:h-20">
-          <Link href="#top" className="shrink-0" aria-label="PARTNRA home">
-            <Logo className="hidden md:block" priority />
-            <LogoIcon className="md:hidden" />
+        <div className="flex h-20 items-center justify-between md:h-24">
+          <Link
+            href="#top"
+            className="flex shrink-0 items-center overflow-visible py-2"
+            aria-label="PARTNRA home"
+          >
+            <Logo priority />
           </Link>
 
-          <nav className="hidden items-center gap-9 lg:flex">
-            {NAV.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="text-sm font-medium text-ink/70 transition-colors hover:text-ink"
-              >
-                {item.label}
-              </Link>
-            ))}
+          <nav className="hidden items-center gap-10 lg:flex">
+            {NAV.map((item) => {
+              const isActive = activeId === item.id;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={clsx(
+                    "group relative py-2 text-[18px] font-semibold tracking-tight transition-colors duration-200",
+                    isActive ? "text-ink" : "text-ink/55 hover:text-ink"
+                  )}
+                >
+                  {item.label}
+                  <span
+                    className={clsx(
+                      "pointer-events-none absolute -bottom-0.5 left-0 h-[2px] w-full origin-left scale-x-0 bg-lime transition-transform duration-200 ease-out group-hover:scale-x-100",
+                      isActive && "scale-x-100"
+                    )}
+                  />
+                </Link>
+              );
+            })}
           </nav>
 
           <div className="hidden lg:block">
-            <Button href="#audit" variant="primary" className="!px-5 !py-3 text-[13px]">
-              Free affiliate audit
+            <Button href="#audit" variant="secondary" size="sm">
+              Free audit
             </Button>
           </div>
 
@@ -101,7 +141,10 @@ export function Header() {
                 key={item.href}
                 href={item.href}
                 onClick={() => setMenuOpen(false)}
-                className="py-3 text-lg font-medium text-ink/80"
+                className={clsx(
+                  "py-3 text-lg font-semibold transition-colors",
+                  activeId === item.id ? "text-ink" : "text-ink/70"
+                )}
               >
                 {item.label}
               </Link>
