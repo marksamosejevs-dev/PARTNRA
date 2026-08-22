@@ -31,11 +31,18 @@ export function Hero() {
             </Reveal>
 
             <Reveal delay={0.24}>
-              <p className="mt-8 max-w-xl text-base leading-relaxed text-ink/65 md:text-lg">
-                PARTNRA searches for creators, publishers and affiliates already promoting
-                competing brands, identifies the strongest prospects and helps you recruit
-                them into your affiliate programme.
-              </p>
+              <ul className="mt-8 flex max-w-xl flex-col gap-2.5">
+                {[
+                  "Finds who's already promoting your competitors.",
+                  "Scores and prioritises the strongest prospects.",
+                  "Helps you recruit them into your programme.",
+                ].map((line) => (
+                  <li key={line} className="flex items-start gap-2.5 text-base text-ink/80 md:text-lg">
+                    <span className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-lime" />
+                    {line}
+                  </li>
+                ))}
+              </ul>
             </Reveal>
 
             <Reveal delay={0.32}>
@@ -50,8 +57,8 @@ export function Hero() {
             </Reveal>
 
             <Reveal delay={0.4}>
-              <p className="mt-8 text-sm text-ink/40">
-                No new affiliate network. No agency retainer. Keep your existing programme.
+              <p className="mt-8 text-sm font-medium text-ink/55">
+                No new affiliate network. Keep your existing programme.
               </p>
             </Reveal>
           </div>
