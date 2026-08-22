@@ -21,7 +21,7 @@ export function Marquee({
           )}
         >
           {item}
-          <Arrow className="text-lime" />
+          <Arrow direction="right" className="text-lime" />
         </span>
       ))}
     </div>

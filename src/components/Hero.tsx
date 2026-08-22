@@ -3,6 +3,7 @@ import { SectionLabel } from "./ui/SectionLabel";
 import { Button } from "./ui/Button";
 import { Reveal } from "./ui/Reveal";
 import { AffiliateFlow } from "./AffiliateFlow";
+import { HeroProcessFlow } from "./HeroProcessFlow";
 
 export function Hero() {
   return (
@@ -30,22 +31,9 @@ export function Hero() {
               </p>
             </Reveal>
 
-            <Reveal delay={0.24}>
-              <ul className="mt-8 flex max-w-xl flex-col gap-2.5">
-                {[
-                  "Finds who's already promoting your competitors.",
-                  "Scores and prioritises the strongest prospects.",
-                  "Helps you recruit them into your programme.",
-                ].map((line) => (
-                  <li key={line} className="flex items-start gap-2.5 text-base text-ink/80 md:text-lg">
-                    <span className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-lime" />
-                    {line}
-                  </li>
-                ))}
-              </ul>
-            </Reveal>
+            <HeroProcessFlow />
 
-            <Reveal delay={0.32}>
+            <Reveal delay={0.66}>
               <div className="mt-10 flex flex-wrap items-center gap-x-8 gap-y-4">
                 <Button href="#audit" variant="secondary" size="lg" className="w-full sm:w-auto">
                   Find my affiliates
@@ -56,7 +44,7 @@ export function Hero() {
               </div>
             </Reveal>
 
-            <Reveal delay={0.4}>
+            <Reveal delay={0.76}>
               <p className="mt-8 text-sm font-medium text-ink/55">
                 No new affiliate network. Keep your existing programme.
               </p>
