@@ -1,7 +1,10 @@
+"use client";
+
 import clsx from "clsx";
 import Link from "next/link";
 import { Arrow } from "./Arrow";
-import { ReactNode } from "react";
+import { ReactNode, MouseEvent } from "react";
+import { scrollToHash } from "@/lib/scroll";
 
 type Variant = "primary" | "secondary" | "ghost";
 type Size = "sm" | "md" | "lg";
@@ -53,6 +56,26 @@ export function Button({
   );
 
   if (href) {
+    const isHash = href.startsWith("#");
+
+    if (isHash) {
+      const handleClick = (e: MouseEvent<HTMLAnchorElement>) => {
+        e.preventDefault();
+        scrollToHash(href);
+        onClick?.();
+      };
+
+      return (
+        <a
+          href={href}
+          onClick={handleClick}
+          className={clsx(base, sizeClasses, variants[variant], className)}
+        >
+          {content}
+        </a>
+      );
+    }
+
     return (
       <Link href={href} className={clsx(base, sizeClasses, variants[variant], className)}>
         {content}
