@@ -6,6 +6,7 @@ import { SectionLabel } from "./ui/SectionLabel";
 import { Reveal, RevealGroup, RevealItem } from "./ui/Reveal";
 import { CountUp } from "./ui/CountUp";
 import { Arrow } from "./ui/Arrow";
+import { scrollToHash } from "@/lib/scroll";
 
 const METRICS = [
   { value: 37, label: "High intent" },
@@ -42,9 +43,13 @@ export function CompetitorIntelligence() {
                 <span className="font-mono-label text-sm text-ink/35">https://</span>
                 <span className="font-mono-label text-sm text-ink/70">yourbrand.com</span>
               </div>
-              <div className="inline-flex items-center justify-center gap-2 rounded-full bg-ink px-6 py-3.5 text-sm font-semibold text-paper">
+              <button
+                type="button"
+                onClick={() => scrollToHash("#audit")}
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-ink px-6 py-3.5 text-sm font-semibold text-paper transition-all duration-200 hover:brightness-125 active:scale-[0.99]"
+              >
                 Analyse competitors <Arrow />
-              </div>
+              </button>
             </div>
 
             <div className="p-5 md:p-7">

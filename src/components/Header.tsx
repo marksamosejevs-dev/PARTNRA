@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useEffect, useState, MouseEvent } from "react";
 import clsx from "clsx";
 import { Logo } from "./ui/Logo";
 import { Button } from "./ui/Button";
 import { Container } from "./ui/Container";
+import { scrollToHash } from "@/lib/scroll";
 
 const NAV = [
   { label: "Product", href: "#product", id: "product" },
@@ -68,21 +68,29 @@ export function Header() {
     >
       <Container>
         <div className="flex h-20 items-center justify-between md:h-24">
-          <Link
+          <a
             href="#top"
+            onClick={(e: MouseEvent<HTMLAnchorElement>) => {
+              e.preventDefault();
+              scrollToHash("#top");
+            }}
             className="flex shrink-0 items-center overflow-visible py-2"
             aria-label="PARTNRA home"
           >
             <Logo priority />
-          </Link>
+          </a>
 
           <nav className="hidden items-center gap-10 lg:flex">
             {NAV.map((item) => {
               const isActive = activeId === item.id;
               return (
-                <Link
+                <a
                   key={item.href}
                   href={item.href}
+                  onClick={(e: MouseEvent<HTMLAnchorElement>) => {
+                    e.preventDefault();
+                    scrollToHash(item.href);
+                  }}
                   className={clsx(
                     "group relative py-2 text-[18px] font-semibold tracking-tight transition-colors duration-200",
                     isActive ? "text-ink" : "text-ink/55 hover:text-ink"
@@ -95,7 +103,7 @@ export function Header() {
                       isActive && "scale-x-100"
                     )}
                   />
-                </Link>
+                </a>
               );
             })}
           </nav>
@@ -137,17 +145,21 @@ export function Header() {
         <Container>
           <nav className="flex flex-col gap-1 py-4">
             {NAV.map((item) => (
-              <Link
+              <a
                 key={item.href}
                 href={item.href}
-                onClick={() => setMenuOpen(false)}
+                onClick={(e: MouseEvent<HTMLAnchorElement>) => {
+                  e.preventDefault();
+                  setMenuOpen(false);
+                  scrollToHash(item.href);
+                }}
                 className={clsx(
                   "py-3 text-lg font-semibold transition-colors",
                   activeId === item.id ? "text-ink" : "text-ink/70"
                 )}
               >
                 {item.label}
-              </Link>
+              </a>
             ))}
             <Button
               href="#audit"

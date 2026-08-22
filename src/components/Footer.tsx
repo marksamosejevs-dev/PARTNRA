@@ -1,6 +1,9 @@
-import Link from "next/link";
+"use client";
+
+import { MouseEvent } from "react";
 import { Container } from "./ui/Container";
 import { LogoChip } from "./ui/Logo";
+import { scrollToHash } from "@/lib/scroll";
 
 const LINKS = [
   { label: "Product", href: "#product" },
@@ -29,13 +32,17 @@ export function Footer() {
 
           <nav className="grid grid-cols-2 gap-x-12 gap-y-3 sm:grid-cols-4 md:gap-x-16">
             {LINKS.map((link) => (
-              <Link
+              <a
                 key={link.label}
                 href={link.href}
+                onClick={(e: MouseEvent<HTMLAnchorElement>) => {
+                  e.preventDefault();
+                  scrollToHash(link.href);
+                }}
                 className="text-sm text-paper/55 transition-colors hover:text-paper"
               >
                 {link.label}
-              </Link>
+              </a>
             ))}
           </nav>
         </div>
