@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { Arrow } from "./Arrow";
 
 export function Marquee({
   items,
@@ -15,11 +16,12 @@ export function Marquee({
         <span
           key={i}
           className={clsx(
-            "font-display shrink-0 whitespace-nowrap pr-10 text-[13vw] leading-none md:pr-16 md:text-[7vw]",
+            "font-display flex shrink-0 items-center gap-x-6 whitespace-nowrap pr-10 text-[13vw] leading-none md:gap-x-10 md:pr-16 md:text-[7vw]",
             textClassName
           )}
         >
           {item}
+          <Arrow className="text-lime" />
         </span>
       ))}
     </div>
