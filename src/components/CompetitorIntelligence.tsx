@@ -26,7 +26,7 @@ export function CompetitorIntelligence() {
     <section className="border-t border-ink/10 py-24 md:py-36">
       <Container>
         <Reveal>
-          <SectionLabel>03 / Competitor intelligence</SectionLabel>
+          <SectionLabel>Competitor intelligence</SectionLabel>
         </Reveal>
 
         <Reveal delay={0.06}>

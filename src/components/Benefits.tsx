@@ -52,7 +52,7 @@ export function Benefits() {
     <section className="py-24 md:py-36">
       <Container>
         <Reveal>
-          <SectionLabel>06 / What PARTNRA does</SectionLabel>
+          <SectionLabel>What PARTNRA does</SectionLabel>
         </Reveal>
 
         <RevealGroup className="mt-10 grid grid-cols-1 gap-px overflow-hidden rounded-3xl border border-ink/10 bg-ink/10 sm:grid-cols-2 lg:grid-cols-3">

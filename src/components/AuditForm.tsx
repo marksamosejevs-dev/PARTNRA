@@ -147,11 +147,11 @@ export function AuditForm() {
                 <button
                   type="submit"
                   disabled={state === "loading"}
-                  className="group mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-lime px-6 py-4 text-sm font-semibold text-ink transition-opacity hover:opacity-90 disabled:opacity-60 sm:w-auto"
+                  className="group mt-5 inline-flex h-14 w-full items-center justify-center gap-2.5 rounded-full bg-lime px-8 text-base font-semibold text-ink shadow-[0_0_0_0_rgba(199,255,53,0)] transition-all duration-200 ease-out will-change-transform hover:scale-[1.02] hover:brightness-110 hover:shadow-[0_0_32px_4px_rgba(199,255,53,0.45)] active:scale-[0.99] disabled:pointer-events-none disabled:opacity-60 sm:w-auto md:h-16 md:px-10 md:text-lg"
                 >
                   {state === "loading" ? "Sending..." : "Find my affiliates"}
                   {state !== "loading" && (
-                    <Arrow className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                    <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
                   )}
                 </button>
 
