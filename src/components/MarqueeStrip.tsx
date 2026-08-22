@@ -1,6 +1,6 @@
 import { Marquee } from "./ui/Marquee";
 
-const items = ["DISCOVER", "—", "QUALIFY", "—", "CONTACT", "—", "RECRUIT", "—", "GROW", "—"];
+const items = ["DISCOVER", "QUALIFY", "CONTACT", "RECRUIT", "GROW"];
 
 export function MarqueeStrip() {
   return (
