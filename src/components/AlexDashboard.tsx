@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import clsx from "clsx";
 import { Container } from "./ui/Container";
 import { Reveal, RevealGroup, RevealItem } from "./ui/Reveal";
 import { CountUp } from "./ui/CountUp";
@@ -113,19 +114,34 @@ export function AlexDashboard() {
             <div className="mt-6 flex flex-wrap gap-2.5">
               <button
                 onClick={() => setDecision("approve")}
-                className="rounded-full bg-lime px-4 py-2.5 text-sm font-semibold text-ink transition-opacity hover:opacity-85"
+                className={clsx(
+                  "rounded-full px-4 py-2.5 text-sm font-semibold transition-all duration-200 active:scale-[0.97]",
+                  decision === "approve"
+                    ? "bg-lime text-ink shadow-[0_0_20px_2px_rgba(199,255,53,0.4)]"
+                    : "border border-white/20 text-paper hover:border-lime/50 hover:text-lime"
+                )}
               >
                 Approve 25%
               </button>
               <button
                 onClick={() => setDecision("counter")}
-                className="rounded-full border border-white/20 px-4 py-2.5 text-sm font-semibold text-paper transition-colors hover:border-white/40"
+                className={clsx(
+                  "rounded-full px-4 py-2.5 text-sm font-semibold transition-all duration-200 active:scale-[0.97]",
+                  decision === "counter"
+                    ? "bg-lime text-ink shadow-[0_0_20px_2px_rgba(199,255,53,0.4)]"
+                    : "border border-white/20 text-paper hover:border-lime/50 hover:text-lime"
+                )}
               >
                 Counter 22%
               </button>
               <button
                 onClick={() => setDecision("reject")}
-                className="rounded-full border border-white/10 px-4 py-2.5 text-sm font-semibold text-paper/50 transition-colors hover:text-paper/80"
+                className={clsx(
+                  "rounded-full px-4 py-2.5 text-sm font-semibold transition-all duration-200 active:scale-[0.97]",
+                  decision === "reject"
+                    ? "bg-lime text-ink shadow-[0_0_20px_2px_rgba(199,255,53,0.4)]"
+                    : "border border-white/10 text-paper/50 hover:text-paper/80"
+                )}
               >
                 Reject
               </button>
