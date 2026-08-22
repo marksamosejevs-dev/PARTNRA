@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+:root {
+  --color-paper: #f4f2ec;
+  --color-surface: #e8e5dd;
+  --color-ink: #0a0a0a;
+  --color-lime: #c7ff35;
+  --color-line: rgba(10, 10, 10, 0.12);
+  --color-line-dark: rgba(244, 242, 236, 0.14);
+}
+
+@theme inline {
+  --color-paper: var(--color-paper);
+  --color-surface: var(--color-surface);
+  --color-ink: var(--color-ink);
+  --color-lime: var(--color-lime);
+  --color-line: var(--color-line);
+  --color-line-dark: var(--color-line-dark);
+  --font-display: var(--font-space-grotesk);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: var(--color-lime);
+  color: var(--color-ink);
+}
+
+.font-display {
+  font-family: var(--font-display), var(--font-sans), sans-serif;
+}
+
+.font-mono-label {
+  font-family: var(--font-mono), monospace;
+}
+
+/* Marquee */
+@keyframes marquee-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.marquee-track {
+  animation: marquee-scroll 32s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track {
+    animation: none;
+  }
+}
+
+/* Status pulse */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.85);
+  }
+}
+
+.pulse-dot {
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot {
+    animation: none;
+  }
+}
+
+/* Thin grid divider helpers */
+.hairline {
+  background: var(--color-line);
+}
+.hairline-dark {
+  background: var(--color-line-dark);
+}
+
+/* Custom scrollbar for horizontally scrollable strips on mobile */
+.scroll-strip::-webkit-scrollbar {
+  display: none;
+}
+.scroll-strip {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
