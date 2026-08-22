@@ -13,7 +13,7 @@ const LEAVES = [
 
 function DiscoverGraphic() {
   return (
-    <div className="mt-4">
+    <div>
       <div className="flex justify-center">
         <div className="rounded-lg border border-ink/15 bg-surface px-3 py-1.5">
           <span className="font-mono-label text-[9px] font-semibold uppercase tracking-[0.1em] text-ink/60">
@@ -51,7 +51,7 @@ const RANKINGS = [
 
 function ScoreGraphic() {
   return (
-    <div className="mt-4 flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2.5">
       {RANKINGS.map((row, i) => (
         <div key={row.rank} className="flex items-center gap-2.5">
           <span className="font-mono-label w-4 shrink-0 text-[10px] text-ink/35">{row.rank}</span>
@@ -78,7 +78,7 @@ function ScoreGraphic() {
 
 function RecruitGraphic() {
   return (
-    <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
+    <div className="flex flex-wrap items-center justify-center gap-1.5">
       <div className="rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5">
         <span className="font-mono-label text-[9px] font-semibold uppercase tracking-[0.08em] text-ink/55">
           Competitor
@@ -125,7 +125,7 @@ export function HeroProcessFlow() {
   const prefersReducedMotion = useReducedMotion();
 
   return (
-    <div className="mt-8 max-w-sm">
+    <div className="mt-8 max-w-sm md:max-w-2xl">
       {STEPS.map((step, i) => {
         const delay = BASE_DELAY + i * STEP_STAGGER;
         return (
@@ -135,15 +135,23 @@ export function HeroProcessFlow() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, margin: "0px 0px -10% 0px", amount: 0.2 }}
               transition={{ duration: 0.4, delay, ease: [0.16, 1, 0.3, 1] }}
-              className="rounded-2xl border border-ink/10 bg-paper/80 p-4"
+              className="rounded-2xl border border-ink/10 bg-paper/80 p-4 md:p-6"
             >
-              <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/45">
-                {step.label}
-              </span>
-              <p className="mt-1.5 text-[20px] font-semibold leading-snug tracking-tight text-ink md:text-[22px]">
-                {step.text}
-              </p>
-              <step.Graphic />
+              <div className="md:flex md:items-center md:gap-10">
+                <div className="md:w-2/5 md:shrink-0">
+                  <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/45">
+                    {step.label}
+                  </span>
+                  <p className="mt-1.5 text-[20px] font-semibold leading-snug tracking-tight text-ink md:text-[22px]">
+                    {step.text}
+                  </p>
+                </div>
+                <div className="mt-4 md:mt-0 md:w-3/5">
+                  <div className="md:mx-auto md:max-w-xs">
+                    <step.Graphic />
+                  </div>
+                </div>
+              </div>
             </motion.div>
 
             {i < STEPS.length - 1 && (
