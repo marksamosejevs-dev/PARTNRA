@@ -4,10 +4,10 @@ import { Reveal } from "./ui/Reveal";
 
 export function SimpleExample() {
   return (
-    <section className="py-24 md:py-36">
+    <section className="bg-ink py-24 text-paper md:py-36">
       <Container>
         <Reveal>
-          <SectionLabel>A simple example</SectionLabel>
+          <SectionLabel tone="paper">A simple example</SectionLabel>
         </Reveal>
 
         <Reveal delay={0.06}>
@@ -17,7 +17,7 @@ export function SimpleExample() {
         </Reveal>
 
         <Reveal delay={0.12}>
-          <div className="mt-10 max-w-2xl space-y-3 text-lg leading-relaxed text-ink/60 md:text-xl">
+          <div className="mt-10 max-w-2xl space-y-3 text-lg leading-relaxed text-paper/60 md:text-xl">
             <p>
               Your competitors already have creators, review sites and publishers sending
               customers to them.

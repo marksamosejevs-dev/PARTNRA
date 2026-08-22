@@ -9,6 +9,7 @@ export function Logo({ className, priority }: { className?: string; priority?: b
       width={1507}
       height={283}
       priority={priority}
+      unoptimized
       className={clsx("h-8 w-auto object-contain sm:h-9 md:h-10", className)}
     />
   );
@@ -34,7 +35,8 @@ export function LogoIcon({ className }: { className?: string }) {
       alt="PARTNRA"
       width={289}
       height={275}
-      className={clsx("h-8 w-auto", className)}
+      unoptimized
+      className={clsx("h-8 w-auto object-contain", className)}
     />
   );
 }
