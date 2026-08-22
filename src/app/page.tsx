@@ -31,6 +31,7 @@ export default function Home() {
       <Header />
       <main>
         <Hero />
+        <Vision />
         <MarqueeStrip />
         <SimpleExample />
         <ManualVsPartnra />
@@ -52,7 +53,6 @@ export default function Home() {
         <AuditForm />
         <Pilot />
         <Roadmap />
-        <Vision />
         <FinalCTA />
       </main>
       <Footer />
