@@ -9,10 +9,8 @@ const LINKS = [
   { label: "Product", href: "#product" },
   { label: "Alex", href: "#alex" },
   { label: "How it works", href: "#how-it-works" },
-  { label: "Pilot", href: "#pilot" },
+  { label: "Pricing", href: "#pricing" },
   { label: "Contact", href: "#audit" },
-  { label: "Privacy", href: "#" },
-  { label: "Terms", href: "#" },
 ];
 
 export function Footer() {

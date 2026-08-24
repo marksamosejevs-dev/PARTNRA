@@ -139,7 +139,50 @@ searches, verifies evidence, and looks up contact details.
   Hunter isn't configured or didn't find anything, it shows "Coming soon" or
   "Not found" — never a guessed email.
 
-## 6. Deploying
+## 6. Setting up subscription payments (Stripe)
+
+The pricing section's "Choose your plan" flow needs a Stripe account before
+it can actually charge anyone. Until it's set up, clicking through to
+checkout shows a clean "Subscriptions aren't open yet" message — visitors
+never see a broken or fake checkout.
+
+1. Create a Stripe account at https://dashboard.stripe.com/register if you
+   don't have one.
+2. **Get your API keys**: go to
+   https://dashboard.stripe.com/apikeys and copy the **Secret key** (starts
+   with `sk_`). That's your `STRIPE_SECRET_KEY`.
+3. **Create a Price for each plan**: go to
+   https://dashboard.stripe.com/products → **Add product**. Create three
+   products (Starter, Growth, Pro) with a **recurring monthly** price of
+   $49, $99, and $199. For each one, open the product and copy its **Price
+   ID** (starts with `price_`) — these become `STRIPE_PRICE_STARTER`,
+   `STRIPE_PRICE_GROWTH`, and `STRIPE_PRICE_PRO`.
+4. **Set up the webhook**: go to
+   https://dashboard.stripe.com/webhooks → **Add endpoint**. Set the URL to
+   `https://<your-live-domain>/api/webhooks/stripe`, and select at least
+   these events: `checkout.session.completed`, `customer.subscription.updated`,
+   `customer.subscription.deleted`. After creating it, click into the
+   endpoint and copy its **Signing secret** (starts with `whsec_`) — that's
+   your `STRIPE_WEBHOOK_SECRET`.
+5. Add all five values in Netlify the same way as the other keys (Site
+   configuration → Environment variables): `STRIPE_SECRET_KEY`,
+   `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_GROWTH`,
+   `STRIPE_PRICE_PRO`. Then trigger a new deploy.
+
+**Test mode first:** Stripe gives you separate test and live API keys —
+start with the test ones (also on the API keys page) and use
+[Stripe's test card numbers](https://docs.stripe.com/testing) to confirm a
+full checkout before switching to live keys.
+
+**What still needs building beyond this:** the webhook endpoint verifies
+Stripe's signature and acknowledges events, but this project has no
+database yet, so it doesn't store subscription status anywhere (see the
+comment in `src/app/api/webhooks/stripe/route.ts`). A subscriber's payment
+is real and processed by Stripe either way, but "is this visitor currently
+subscribed" isn't tracked on our side yet — that needs an accounts/database
+layer as a follow-up piece of work.
+
+## 7. Deploying
 
 This site auto-deploys through Netlify whenever changes are pushed to the
 connected GitHub branch. To deploy manually:
@@ -151,10 +194,16 @@ npm run build
 If this command finishes without errors, Netlify will succeed too. Then
 push your changes to GitHub — Netlify picks them up automatically.
 
-## 7. Project structure (for reference)
+## 8. Project structure (for reference)
 
 - `src/app/page.tsx` — the order of sections on the homepage
 - `src/components/` — one file per section/component
 - `src/app/api/discover-affiliates/route.ts` — the scanner's backend logic
 - `src/lib/discovery/` — search, AI classification, and domain-parsing logic
   used by the scanner
+- `src/components/PlanSelector.tsx` + `src/app/api/checkout/route.ts` — the
+  "Choose your plan" modal and the Stripe Checkout Session it creates
+- `src/app/api/webhooks/stripe/route.ts` — verifies and receives Stripe's
+  webhook events
+- `src/app/subscribed/page.tsx` — the post-checkout success page (verifies
+  payment with Stripe directly before showing "Welcome to PARTNRA")
