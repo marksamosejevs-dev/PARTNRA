@@ -16,7 +16,7 @@ export function Hero() {
             </Reveal>
 
             <Reveal delay={0.08}>
-              <h1 className="font-display mt-6 text-[clamp(2.5rem,8.5vw,6.6rem)] font-medium leading-[0.98] tracking-tight text-ink">
+              <h1 className="font-display mt-6 text-[clamp(2.25rem,7.5vw,5.8rem)] font-medium leading-[0.98] tracking-tight text-ink">
                 Find the affiliates
                 <br />
                 already promoting

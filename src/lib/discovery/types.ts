@@ -8,30 +8,48 @@ export type EvidenceType =
 
 export type CandidateType = "Creator" | "Publisher" | "Reviewer" | "Site";
 
+export type SourceName = "Web" | "YouTube" | "Instagram" | "TikTok";
+
+export type ContactStatus = "found" | "not_found" | "not_attempted";
+
 export interface Candidate {
   name: string | null;
   type: CandidateType | null;
+  /** Human-readable platform label(s), e.g. "YouTube" or "YouTube, Instagram" once merged. */
   platform: string | null;
   profileUrl: string | null;
+  /** Strongest/first evidence link — what "View evidence" opens. */
   sourceUrl: string;
+  /** How many independent sources corroborate this candidate (>=1). Used as a ranking tiebreaker, never to inflate confidence. */
+  sourceCount: number;
   evidenceType: EvidenceType | null;
   evidence: string;
   promoCode: string | null;
   contact: string | null;
+  contactStatus: ContactStatus;
   confidence: number;
   reason: string;
 }
 
-/** Raw shape the LLM classifier is forced to return for a single search result. */
-export interface ClassifiedResult extends Omit<Candidate, "sourceUrl"> {
-  validCandidate: boolean;
-  sourceUrl: string;
-}
-
-export interface SearchResult {
+/**
+ * One item pulled from a single provider (Serper, YouTube, Apify) before
+ * classification. Providers already know their own platform with certainty,
+ * so the classifier is never asked to guess it.
+ */
+export interface SourceItem {
+  source: SourceName;
+  platform: string;
   title: string;
   url: string;
+  profileUrl: string | null;
   snippet: string;
+}
+
+/** Raw shape the LLM classifier is forced to return for a single source item. */
+export interface ClassifiedResult extends Omit<Candidate, "sourceUrl" | "platform" | "sourceCount" | "contact" | "contactStatus"> {
+  validCandidate: boolean;
+  sourceUrl: string;
+  platform: string;
 }
 
 export interface DiscoverResponse {

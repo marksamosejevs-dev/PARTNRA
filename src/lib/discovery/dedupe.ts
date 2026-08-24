@@ -21,10 +21,23 @@ function isSameAffiliate(a: Candidate, b: Candidate): boolean {
   return false;
 }
 
+function mergePlatforms(a: string | null, b: string | null): string | null {
+  const set = new Set(
+    [a, b]
+      .filter((p): p is string => !!p)
+      .flatMap((p) => p.split(",").map((s) => s.trim()))
+      .filter(Boolean)
+  );
+  return set.size ? Array.from(set).join(", ") : null;
+}
+
 /**
  * Drops invalid/low-confidence classifications, merges repeat sightings of
- * the same affiliate (same profile URL, promo code, or name) into one
- * candidate, and sorts by confidence.
+ * the same affiliate found across sources (same profile URL, promo code, or
+ * name) into one candidate with a combined platform list and source count,
+ * and sorts by confidence, then by source count so a candidate corroborated
+ * by multiple independent sources ranks above an equally-confident
+ * single-source one -- without inflating the confidence number itself.
  */
 export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
   const merged: Candidate[] = [];
@@ -38,10 +51,12 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       platform: item.platform,
       profileUrl: item.profileUrl,
       sourceUrl: item.sourceUrl,
+      sourceCount: 1,
       evidenceType: item.evidenceType,
       evidence: item.evidence,
       promoCode: item.promoCode,
-      contact: item.contact,
+      contact: null,
+      contactStatus: "not_attempted",
       confidence: item.confidence,
       reason: item.reason,
     };
@@ -59,11 +74,13 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
 
     merged[existingIndex] = {
       ...primary,
+      platform: mergePlatforms(primary.platform, secondary.platform),
       evidence: primary.evidence === secondary.evidence
         ? primary.evidence
         : `${primary.evidence} ${secondary.evidence}`.trim(),
+      sourceCount: existing.sourceCount + 1,
     };
   }
 
-  return merged.sort((a, b) => b.confidence - a.confidence);
+  return merged.sort((a, b) => b.confidence - a.confidence || b.sourceCount - a.sourceCount);
 }
