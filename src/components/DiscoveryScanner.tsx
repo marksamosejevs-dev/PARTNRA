@@ -200,7 +200,7 @@ export function DiscoveryScanner() {
 
           <div className="mt-5 flex flex-col gap-4">
             {shown.map((candidate, i) => (
-              <EvidenceCard key={`${candidate.sourceUrl}-${i}`} candidate={candidate} />
+              <EvidenceCard key={`${candidate.sourceUrl}-${i}`} candidate={candidate} demo={result.mock} />
             ))}
           </div>
 

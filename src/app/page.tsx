@@ -1,4 +1,5 @@
 import { Header } from "@/components/Header";
+import { CheckoutCancelledNotice } from "@/components/CheckoutCancelledNotice";
 import { Hero } from "@/components/Hero";
 import { MarqueeStrip } from "@/components/MarqueeStrip";
 import { SimpleExample } from "@/components/SimpleExample";
@@ -21,7 +22,6 @@ import { SimplestExplanation } from "@/components/SimplestExplanation";
 import { ROI } from "@/components/ROI";
 import { Pricing } from "@/components/Pricing";
 import { AuditForm } from "@/components/AuditForm";
-import { Pilot } from "@/components/Pilot";
 import { Roadmap } from "@/components/Roadmap";
 import { Vision } from "@/components/Vision";
 import { FinalCTA } from "@/components/FinalCTA";
@@ -30,6 +30,7 @@ import { Footer } from "@/components/Footer";
 export default function Home() {
   return (
     <>
+      <CheckoutCancelledNotice />
       <Header />
       <main>
         <Hero />
@@ -55,7 +56,6 @@ export default function Home() {
         <ROI />
         <Pricing />
         <AuditForm />
-        <Pilot />
         <Roadmap />
         <FinalCTA />
       </main>

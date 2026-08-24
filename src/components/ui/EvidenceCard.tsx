@@ -6,8 +6,21 @@ import { Arrow } from "./Arrow";
 import { CountUp } from "./CountUp";
 import type { Candidate } from "@/lib/discovery/types";
 
-export function EvidenceCard({ candidate }: { candidate: Candidate }) {
+const pillBase =
+  "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-all duration-200";
+const pillIdle = "border border-ink/15 text-ink hover:border-ink/30";
+const pillActive = "bg-lime text-ink shadow-[0_0_20px_2px_rgba(199,255,53,0.4)]";
+
+/**
+ * `demo` marks example/placeholder candidates (the static ExampleResults
+ * section, or a dev-mock scan) -- their actions never navigate anywhere or
+ * use the placeholder contact, they just give a brief acid-highlight
+ * response so the UI still feels alive without pretending the lead is real.
+ */
+export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate; demo?: boolean }) {
   const [added, setAdded] = useState(false);
+  const [evidenceRevealed, setEvidenceRevealed] = useState(false);
+  const [contactRevealed, setContactRevealed] = useState(false);
 
   return (
     <div className="rounded-2xl border border-ink/10 bg-paper p-6 md:p-7">
@@ -52,43 +65,60 @@ export function EvidenceCard({ candidate }: { candidate: Candidate }) {
         </div>
       )}
 
-      {!candidate.contact && (
+      {!demo && !candidate.contact && (
         <div className="mt-3 text-sm text-ink/40">
           Contact: {candidate.contactStatus === "not_found" ? "Not found" : "Coming soon"}
         </div>
       )}
 
-      <div className="mt-6 flex flex-wrap items-center gap-x-8 gap-y-3 border-t border-ink/10 pt-5">
-        <a
-          href={candidate.sourceUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="group inline-flex items-center gap-2 text-sm font-semibold text-ink transition-opacity hover:opacity-60"
-        >
-          View evidence
-          <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
-        </a>
-        {candidate.contact && (
+      <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-3 border-t border-ink/10 pt-5">
+        {demo ? (
+          <button
+            type="button"
+            onClick={() => setEvidenceRevealed(true)}
+            className={clsx(pillBase, evidenceRevealed ? pillActive : pillIdle)}
+          >
+            {evidenceRevealed ? "Demo evidence" : "View evidence"}
+          </button>
+        ) : (
           <a
-            href={`mailto:${candidate.contact}`}
+            href={candidate.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             className="group inline-flex items-center gap-2 text-sm font-semibold text-ink transition-opacity hover:opacity-60"
           >
-            Contact
+            View evidence
             <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
           </a>
         )}
+
+        {demo ? (
+          <button
+            type="button"
+            onClick={() => setContactRevealed(true)}
+            className={clsx(pillBase, contactRevealed ? pillActive : pillIdle)}
+          >
+            {contactRevealed ? "Contact available in live results" : "Contact"}
+          </button>
+        ) : (
+          candidate.contact && (
+            <a
+              href={`mailto:${candidate.contact}`}
+              className="group inline-flex items-center gap-2 text-sm font-semibold text-ink transition-opacity hover:opacity-60"
+            >
+              Contact
+              <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
+            </a>
+          )
+        )}
+
         <button
           type="button"
           onClick={() => setAdded(true)}
           disabled={added}
-          className={clsx(
-            "inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-200",
-            added
-              ? "bg-lime text-ink shadow-[0_0_20px_2px_rgba(199,255,53,0.4)]"
-              : "border border-ink/15 text-ink hover:border-ink/30"
-          )}
+          className={clsx(pillBase, added ? pillActive : pillIdle)}
         >
-          {added ? "Added to pipeline" : "Add to pipeline"}
+          {added ? "Added ✓" : "Add to pipeline"}
         </button>
       </div>
     </div>

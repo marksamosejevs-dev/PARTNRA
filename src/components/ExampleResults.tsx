@@ -86,7 +86,7 @@ export function ExampleResults() {
         <RevealGroup className="mt-6 flex flex-col gap-4">
           {EXAMPLE_CANDIDATES.map((candidate) => (
             <RevealItem key={candidate.sourceUrl}>
-              <EvidenceCard candidate={candidate} />
+              <EvidenceCard candidate={candidate} demo />
             </RevealItem>
           ))}
         </RevealGroup>

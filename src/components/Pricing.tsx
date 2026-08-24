@@ -1,12 +1,17 @@
+"use client";
+
 import { Container } from "./ui/Container";
 import { SectionLabel } from "./ui/SectionLabel";
 import { Reveal } from "./ui/Reveal";
 import { Button } from "./ui/Button";
 import clsx from "clsx";
+import { usePlanSelector } from "./PlanSelector";
+import { PlanKey } from "@/lib/plans";
 
 type Feature = string | { text: string; comingSoon: true };
 
 interface Plan {
+  key: PlanKey;
   name: string;
   price: string;
   tagline: string;
@@ -17,6 +22,7 @@ interface Plan {
 
 const PLANS: Plan[] = [
   {
+    key: "starter",
     name: "Starter",
     price: "$49",
     tagline: "For small brands starting affiliate discovery.",
@@ -32,6 +38,7 @@ const PLANS: Plan[] = [
     cta: "Start discovering",
   },
   {
+    key: "growth",
     name: "Growth",
     price: "$99",
     tagline: "For growing e-commerce brands actively recruiting affiliates.",
@@ -49,6 +56,7 @@ const PLANS: Plan[] = [
     highlighted: true,
   },
   {
+    key: "pro",
     name: "Pro",
     price: "$199",
     tagline: "For brands and teams running affiliate acquisition at scale.",
@@ -72,6 +80,8 @@ function isComingSoon(feature: Feature): feature is { text: string; comingSoon: 
 }
 
 export function Pricing() {
+  const { open } = usePlanSelector();
+
   return (
     <section id="pricing" className="scroll-mt-24 border-t border-ink/10 py-24 md:py-36">
       <Container>
@@ -148,7 +158,7 @@ export function Pricing() {
 
                 <div className="mt-8">
                   <Button
-                    href="#pilot"
+                    onClick={() => open(plan.key)}
                     variant={plan.highlighted ? "secondary" : "primary"}
                     className="w-full justify-center"
                   >
@@ -162,7 +172,7 @@ export function Pricing() {
 
         <Reveal delay={0.3}>
           <p className="mt-10 text-center text-sm text-ink/40">
-            Monthly billing. Cancel anytime.
+            Billed monthly. Cancel anytime.
           </p>
         </Reveal>
       </Container>
