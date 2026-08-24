@@ -18,6 +18,11 @@ export function EvidenceCard({ candidate }: { candidate: Candidate }) {
           </h3>
           <div className="mt-1 text-sm text-ink/45">
             {[candidate.platform, candidate.type].filter(Boolean).join(" · ") || "Source"}
+            {candidate.sourceCount > 1 && (
+              <span className="ml-2 font-mono-label text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/35">
+                +{candidate.sourceCount - 1} more source{candidate.sourceCount - 1 === 1 ? "" : "s"}
+              </span>
+            )}
           </div>
         </div>
         <div className="text-right">
@@ -47,9 +52,11 @@ export function EvidenceCard({ candidate }: { candidate: Candidate }) {
         </div>
       )}
 
-      <div className="mt-3 text-sm text-ink/40">
-        Contact: {candidate.contact ?? "Coming soon"}
-      </div>
+      {!candidate.contact && (
+        <div className="mt-3 text-sm text-ink/40">
+          Contact: {candidate.contactStatus === "not_found" ? "Not found" : "Coming soon"}
+        </div>
+      )}
 
       <div className="mt-6 flex flex-wrap items-center gap-x-8 gap-y-3 border-t border-ink/10 pt-5">
         <a
@@ -61,6 +68,15 @@ export function EvidenceCard({ candidate }: { candidate: Candidate }) {
           View evidence
           <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
         </a>
+        {candidate.contact && (
+          <a
+            href={`mailto:${candidate.contact}`}
+            className="group inline-flex items-center gap-2 text-sm font-semibold text-ink transition-opacity hover:opacity-60"
+          >
+            Contact
+            <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
+          </a>
+        )}
         <button
           type="button"
           onClick={() => setAdded(true)}

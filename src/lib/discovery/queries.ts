@@ -13,3 +13,8 @@ export function buildSearchQueries(brand: string, domain: string): string[] {
     `"${brand}" ambassador review`,
   ];
 }
+
+/** YouTube Data API search.list calls are quota-metered per query — keep this list short. */
+export function buildYoutubeQueries(brand: string): string[] {
+  return [`${brand} discount code`, `${brand} affiliate`];
+}

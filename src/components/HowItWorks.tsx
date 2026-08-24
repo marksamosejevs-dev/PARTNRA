@@ -4,25 +4,33 @@ import { Reveal } from "./ui/Reveal";
 
 const STEPS = [
   {
-    n: "01",
-    title: "Enter a competitor",
-    detail: "Add the domain of a brand you want to analyse.",
+    title: "Discover",
+    detail: "Alex analyses your brand and identifies relevant competitors.",
   },
   {
-    n: "02",
-    title: "Partnra searches",
+    title: "Hunt",
     detail:
-      "Partnra searches public web signals for creators, reviews, promo codes, publishers and partner placements.",
+      "Finds creators, publishers, blogs, review sites and affiliates already promoting them.",
   },
   {
-    n: "03",
-    title: "See the evidence",
-    detail: "Understand why every candidate was identified.",
+    title: "Qualify",
+    detail: "Separates genuine commercial affiliates from irrelevant mentions.",
   },
   {
-    n: "04",
+    title: "Research",
+    detail: "Finds relevant publicly available business information.",
+  },
+  {
+    title: "Contact",
+    detail: "Creates personalised recruitment outreach based on actual commercial activity.",
+  },
+  {
+    title: "Follow up",
+    detail: "Helps keep recruitment conversations moving.",
+  },
+  {
     title: "Recruit",
-    detail: "Use the result to find the right contact and build your affiliate pipeline.",
+    detail: "Helps move qualified partners into your existing affiliate programme.",
   },
 ];
 
@@ -36,19 +44,14 @@ export function HowItWorks() {
 
         <div className="mt-10 flex flex-col">
           {STEPS.map((step) => (
-            <Reveal key={step.n} y={32}>
-              <div className="grid grid-cols-[3.5rem_1fr] items-start gap-4 border-t border-ink/10 py-8 last:border-b sm:grid-cols-[6rem_1fr] sm:items-center sm:gap-8 md:py-10">
-                <span className="font-display text-3xl font-medium tracking-tight text-ink/20 sm:text-5xl md:text-6xl">
-                  {step.n}
-                </span>
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1.6fr] md:items-center md:gap-8">
-                  <h3 className="font-display text-2xl font-medium tracking-tight md:text-3xl">
-                    {step.title}
-                  </h3>
-                  <p className="max-w-md text-base leading-relaxed text-ink/55 md:text-lg">
-                    {step.detail}
-                  </p>
-                </div>
+            <Reveal key={step.title} y={32}>
+              <div className="grid grid-cols-1 items-start gap-2 border-t border-ink/10 py-8 last:border-b md:grid-cols-[1fr_1.6fr] md:items-center md:gap-8 md:py-10">
+                <h3 className="font-display text-2xl font-medium tracking-tight md:text-3xl">
+                  {step.title}
+                </h3>
+                <p className="max-w-md text-base leading-relaxed text-ink/55 md:text-lg">
+                  {step.detail}
+                </p>
               </div>
             </Reveal>
           ))}

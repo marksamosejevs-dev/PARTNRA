@@ -11,7 +11,10 @@ at all. The one feature that needs extra configuration is the **competitor
 scanner** in the hero section — the box where a visitor types in a
 competitor's website and clicks "Find their affiliates".
 
-That scanner needs two outside services:
+That scanner needs two **required** outside services, plus three **optional**
+ones that add more coverage and contact details:
+
+**Required:**
 
 1. **A web search API**, so it can search the public web for evidence.
    We use **Serper** (a Google Search API).
@@ -31,6 +34,31 @@ Until both of these are added, the scanner will show a clear message
 ("Search API is not configured.") instead of pretending to work. It will
 never show fake results as if they were real.
 
+**Optional — the scanner works fine without these, they just add more:**
+
+3. **YouTube Data API**, so the scanner also checks YouTube videos/channels.
+   - Sign up at https://console.cloud.google.com/apis/library/youtube.googleapis.com
+   - Create an API key
+   - This gives you a value for `YOUTUBE_API_KEY`
+
+4. **Apify**, so the scanner also checks public Instagram and TikTok posts.
+   - Sign up at https://console.apify.com/
+   - Create an API token under Settings → Integrations
+   - This gives you a value for `APIFY_API_TOKEN`
+
+5. **Hunter**, so verified candidates can show a real business email instead
+   of "Coming soon".
+   - Sign up at https://hunter.io/
+   - Create an API key
+   - This gives you a value for `HUNTER_API_KEY`
+   - Hunter is only ever called for candidates that already passed evidence
+     verification, and only when a real business domain (not a social
+     profile) is available — it never guesses or invents an email.
+
+If any of the three optional services is missing or fails, the scan still
+runs on whichever sources ARE available — it never fails the whole scan
+because one optional add-on isn't configured.
+
 ## 2. Where to add these keys
 
 All of these are **environment variables** — settings the website reads at
@@ -48,6 +76,9 @@ runtime, kept out of the code itself so they're never publicly visible.
    | `SERPER_API_KEY` | (the key from Serper) |
    | `ANTHROPIC_API_KEY` | (the key from Anthropic) |
    | `LLM_MODEL` | `claude-haiku-4-5-20251001` |
+   | `YOUTUBE_API_KEY` | (optional — the key from Google Cloud) |
+   | `APIFY_API_TOKEN` | (optional — the token from Apify) |
+   | `HUNTER_API_KEY` | (optional — the key from Hunter) |
    | `PARTNRA_MOCK_MODE` | `false` |
 
 4. Trigger a new deploy (Netlify → **Deploys** → **Trigger deploy**) so the
@@ -89,9 +120,11 @@ on in Netlify's production environment variables** — leave
 `PARTNRA_MOCK_MODE` set to `false` (or remove it) there.
 
 **With real API keys:** add `SERPER_API_KEY` and `ANTHROPIC_API_KEY` to
-`.env.local`, make sure `PARTNRA_MOCK_MODE` is `false` or removed, restart
-the dev server, and try a real, well-known competitor domain. A real scan
-typically takes several seconds while it searches and verifies evidence.
+`.env.local` (add `YOUTUBE_API_KEY`, `APIFY_API_TOKEN`, and/or
+`HUNTER_API_KEY` too if you have them), make sure `PARTNRA_MOCK_MODE` is
+`false` or removed, restart the dev server, and try a real, well-known
+competitor domain. A real scan typically takes several seconds while it
+searches, verifies evidence, and looks up contact details.
 
 ## 5. How to tell if production is using real data or mock data
 
@@ -101,6 +134,10 @@ typically takes several seconds while it searches and verifies evidence.
 - If the search/AI keys are missing entirely, the scanner shows a plain
   error message and never returns any candidates — it does not fall back to
   fake data silently.
+- Each real result shows exactly which platforms found it (e.g. "YouTube,
+  Instagram") and, if Hunter found a contact, a real "Contact" button. If
+  Hunter isn't configured or didn't find anything, it shows "Coming soon" or
+  "Not found" — never a guessed email.
 
 ## 6. Deploying
 
