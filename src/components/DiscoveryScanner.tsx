@@ -215,15 +215,15 @@ export function DiscoveryScanner() {
               </p>
               <p className="mt-1 text-sm text-paper/55">
                 {moreCount > 0
-                  ? `${moreCount} more signal${moreCount === 1 ? "" : "s"} found. Unlock more competitor scans, affiliate discovery and recruitment tools with Partnra.`
-                  : "Unlock more competitor scans, affiliate discovery and recruitment tools with Partnra."}
+                  ? `${moreCount} more signal${moreCount === 1 ? "" : "s"} found. Unlock more competitor scans, affiliate discovery and recruitment tools with PARTNRA.`
+                  : "Unlock more competitor scans, affiliate discovery and recruitment tools with PARTNRA."}
               </p>
             </div>
             <a
               href="#pricing"
               className="group inline-flex shrink-0 items-center gap-2 rounded-full bg-lime px-6 py-3 text-sm font-semibold text-ink transition-all duration-200 hover:brightness-110"
             >
-              Unlock Partnra
+              Unlock PARTNRA
               <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
             </a>
           </div>

@@ -23,7 +23,7 @@ export function Pilot() {
 
         <Reveal delay={0.06}>
           <h2 className="font-display mt-6 max-w-2xl text-[clamp(2.1rem,5.5vw,4.2rem)] font-medium leading-[1.03] tracking-tight">
-            Find your first competitor affiliates with Partnra.
+            Find your first competitor affiliates with PARTNRA.
           </h2>
         </Reveal>
 

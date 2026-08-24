@@ -27,7 +27,7 @@ export function Hero() {
 
             <Reveal delay={0.16}>
               <p className="mt-6 max-w-xl text-lg leading-relaxed text-ink/55 md:text-xl">
-                Enter a competitor. Partnra searches public web signals to find creators,
+                Enter a competitor. PARTNRA searches public web signals to find creators,
                 publishers, promo codes and affiliate placements already connected to them.
               </p>
             </Reveal>

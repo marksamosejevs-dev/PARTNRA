@@ -26,7 +26,7 @@ export function Footer() {
               AI affiliate recruitment for modern commerce.
             </p>
             <p className="font-mono-label mt-4 text-xs uppercase tracking-[0.16em] text-paper/30">
-              partnra.ai
+              PARTNRA.AI
             </p>
           </div>
 

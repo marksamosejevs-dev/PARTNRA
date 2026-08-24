@@ -68,7 +68,7 @@ export function ExampleResults() {
 
         <Reveal delay={0.12}>
           <p className="mt-6 max-w-2xl text-lg leading-relaxed text-ink/60 md:text-xl">
-            Partnra doesn&rsquo;t just give you a creator list. It shows why each result matters.
+            PARTNRA doesn&rsquo;t just give you a creator list. It shows why each result matters.
           </p>
         </Reveal>
 
