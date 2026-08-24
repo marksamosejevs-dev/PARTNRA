@@ -23,8 +23,15 @@ export function Pilot() {
 
         <Reveal delay={0.06}>
           <h2 className="font-display mt-6 max-w-2xl text-[clamp(2.1rem,5.5vw,4.2rem)] font-medium leading-[1.03] tracking-tight">
-            Put Alex to work.
+            Find your first competitor affiliates with Partnra.
           </h2>
+        </Reveal>
+
+        <Reveal delay={0.1}>
+          <p className="mt-6 max-w-xl text-lg leading-relaxed text-ink/60 md:text-xl">
+            Get early access to competitor-based affiliate discovery and help shape the
+            platform.
+          </p>
         </Reveal>
 
         <Reveal delay={0.14}>
@@ -43,7 +50,7 @@ export function Pilot() {
               </div>
               <div className="mt-10">
                 <Button href="#audit" variant="secondary">
-                  Apply for pilot
+                  Get early access
                 </Button>
               </div>
             </div>
