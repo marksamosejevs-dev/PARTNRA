@@ -55,7 +55,7 @@ export function CompetitorIntelligence() {
 
         <Reveal delay={0.06}>
           <h2 className="font-display mt-6 max-w-3xl text-[clamp(2rem,5.5vw,4.2rem)] font-medium leading-[1.03] tracking-tight">
-            Partnra maps their entire affiliate network.
+            PARTNRA maps their entire affiliate network.
           </h2>
         </Reveal>
 
