@@ -31,6 +31,17 @@ export function Hero() {
                 publishers, promo codes and affiliate placements already connected to them.
               </p>
             </Reveal>
+
+            <Reveal delay={0.24}>
+              <div className="mt-9 flex flex-col items-start gap-3">
+                <Button href="#pricing" variant="secondary" size="lg">
+                  Choose your plan
+                </Button>
+                <p className="text-sm text-ink/45">
+                  Plans from $49/month. Cancel anytime.
+                </p>
+              </div>
+            </Reveal>
           </div>
 
           <div className="flex items-start justify-start lg:justify-end lg:pt-4">

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Container } from "./ui/Container";
 import { SectionLabel } from "./ui/SectionLabel";
 import { Reveal } from "./ui/Reveal";
@@ -7,6 +8,7 @@ import { Button } from "./ui/Button";
 import clsx from "clsx";
 import { usePlanSelector } from "./PlanSelector";
 import { PlanKey } from "@/lib/plans";
+import { PRICING_ARRIVAL_EVENT } from "@/lib/scroll";
 
 type Feature = string | { text: string; comingSoon: true };
 
@@ -81,9 +83,26 @@ function isComingSoon(feature: Feature): feature is { text: string; comingSoon: 
 
 export function Pricing() {
   const { open } = usePlanSelector();
+  const [arrived, setArrived] = useState(false);
+
+  useEffect(() => {
+    function onArrival() {
+      setArrived(true);
+      const timeout = setTimeout(() => setArrived(false), 1400);
+      return () => clearTimeout(timeout);
+    }
+    window.addEventListener(PRICING_ARRIVAL_EVENT, onArrival);
+    return () => window.removeEventListener(PRICING_ARRIVAL_EVENT, onArrival);
+  }, []);
 
   return (
-    <section id="pricing" className="scroll-mt-24 border-t border-ink/10 py-24 md:py-36">
+    <section
+      id="pricing"
+      className={clsx(
+        "scroll-mt-24 border-t border-ink/10 py-24 md:py-36",
+        arrived && "pricing-arrival"
+      )}
+    >
       <Container>
         <Reveal>
           <SectionLabel>Pricing</SectionLabel>
