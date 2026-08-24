@@ -8,6 +8,7 @@ import { NotJustInfluencers } from "@/components/NotJustInfluencers";
 import { CommercialIntent } from "@/components/CommercialIntent";
 import { CreatorComparison } from "@/components/CreatorComparison";
 import { CompetitorIntelligence } from "@/components/CompetitorIntelligence";
+import { ExampleResults } from "@/components/ExampleResults";
 import { AffiliateProfile } from "@/components/AffiliateProfile";
 import { WhyNotInfluencerDB } from "@/components/WhyNotInfluencerDB";
 import { WhyNotAwin } from "@/components/WhyNotAwin";
@@ -18,6 +19,7 @@ import { OutreachDemo } from "@/components/OutreachDemo";
 import { Benefits } from "@/components/Benefits";
 import { SimplestExplanation } from "@/components/SimplestExplanation";
 import { ROI } from "@/components/ROI";
+import { Pricing } from "@/components/Pricing";
 import { AuditForm } from "@/components/AuditForm";
 import { Pilot } from "@/components/Pilot";
 import { Roadmap } from "@/components/Roadmap";
@@ -40,6 +42,7 @@ export default function Home() {
         <CommercialIntent />
         <CreatorComparison />
         <CompetitorIntelligence />
+        <ExampleResults />
         <AffiliateProfile />
         <WhyNotInfluencerDB />
         <WhyNotAwin />
@@ -50,6 +53,7 @@ export default function Home() {
         <Benefits />
         <SimplestExplanation />
         <ROI />
+        <Pricing />
         <AuditForm />
         <Pilot />
         <Roadmap />

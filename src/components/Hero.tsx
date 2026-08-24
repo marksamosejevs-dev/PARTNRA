@@ -3,7 +3,7 @@ import { SectionLabel } from "./ui/SectionLabel";
 import { Button } from "./ui/Button";
 import { Reveal } from "./ui/Reveal";
 import { AffiliateFlow } from "./AffiliateFlow";
-import { HeroProcessFlow } from "./HeroProcessFlow";
+import { DiscoveryScanner } from "./DiscoveryScanner";
 
 export function Hero() {
   return (
@@ -16,18 +16,19 @@ export function Hero() {
             </Reveal>
 
             <Reveal delay={0.08}>
-              <h1 className="font-display mt-6 text-[clamp(2.5rem,9vw,7.2rem)] font-medium leading-[0.98] tracking-tight text-ink">
+              <h1 className="font-display mt-6 text-[clamp(2.5rem,8.5vw,6.6rem)] font-medium leading-[0.98] tracking-tight text-ink">
                 Find the affiliates
                 <br />
-                already selling
+                already promoting
                 <br />
                 your competitors.
               </h1>
             </Reveal>
 
             <Reveal delay={0.16}>
-              <p className="font-display mt-4 text-[clamp(1.5rem,3.6vw,2.75rem)] font-medium leading-[1.05] tracking-tight text-ink/40">
-                Then recruit them for your brand.
+              <p className="mt-6 max-w-xl text-lg leading-relaxed text-ink/55 md:text-xl">
+                Enter a competitor. Partnra searches public web signals to find creators,
+                publishers, promo codes and affiliate placements already connected to them.
               </p>
             </Reveal>
           </div>
@@ -40,23 +41,19 @@ export function Hero() {
         </div>
 
         <div className="mx-auto mt-14 max-w-4xl md:mt-20">
-          <HeroProcessFlow />
+          <Reveal delay={0.4}>
+            <DiscoveryScanner />
+          </Reveal>
 
-          <Reveal delay={0.66}>
-            <div className="mt-10 flex flex-wrap items-center justify-center gap-x-8 gap-y-4">
-              <Button href="#audit" variant="secondary" size="lg" className="w-full sm:w-auto">
-                Find my affiliates
-              </Button>
+          <Reveal delay={0.5}>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-x-8 gap-y-2 text-center">
+              <p className="text-sm font-medium text-ink/55">
+                Public web signals only. No credit card required.
+              </p>
               <Button href="#how-it-works" variant="ghost" arrow={false}>
                 See how it works
               </Button>
             </div>
-          </Reveal>
-
-          <Reveal delay={0.76}>
-            <p className="mt-8 text-center text-sm font-medium text-ink/55">
-              No new affiliate network. Keep your existing programme.
-            </p>
           </Reveal>
         </div>
       </Container>

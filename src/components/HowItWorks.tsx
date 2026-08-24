@@ -5,39 +5,24 @@ import { Reveal } from "./ui/Reveal";
 const STEPS = [
   {
     n: "01",
-    title: "Discover",
-    detail: "Alex analyses your brand and identifies relevant competitors.",
+    title: "Enter a competitor",
+    detail: "Add the domain of a brand you want to analyse.",
   },
   {
     n: "02",
-    title: "Hunt",
+    title: "Partnra searches",
     detail:
-      "Finds creators, publishers, blogs, review sites and affiliates already promoting them.",
+      "Partnra searches public web signals for creators, reviews, promo codes, publishers and partner placements.",
   },
   {
     n: "03",
-    title: "Qualify",
-    detail: "Separates genuine commercial affiliates from irrelevant mentions.",
+    title: "See the evidence",
+    detail: "Understand why every candidate was identified.",
   },
   {
     n: "04",
-    title: "Research",
-    detail: "Finds relevant publicly available business information.",
-  },
-  {
-    n: "05",
-    title: "Contact",
-    detail: "Creates personalised recruitment outreach based on actual commercial activity.",
-  },
-  {
-    n: "06",
-    title: "Follow up",
-    detail: "Helps keep recruitment conversations moving.",
-  },
-  {
-    n: "07",
     title: "Recruit",
-    detail: "Helps move qualified partners into your existing affiliate programme.",
+    detail: "Use the result to find the right contact and build your affiliate pipeline.",
   },
 ];
 
