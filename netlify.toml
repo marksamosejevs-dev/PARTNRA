@@ -4,6 +4,14 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # These three are plain configuration values (a provider name, a model id,
+  # and a boolean feature flag), not credentials -- but their literal values
+  # are also referenced in source (the Serper API URL, the LLM_MODEL fallback
+  # default), which trips Netlify's secret scanner into a false positive
+  # ("Exposed secrets detected") on every deploy. Omitting them here does not
+  # weaken scanning of the real API keys (SERPER_API_KEY, ANTHROPIC_API_KEY,
+  # YOUTUBE_API_KEY, APIFY_API_TOKEN, HUNTER_API_KEY), which stay fully scanned.
+  SECRETS_SCAN_OMIT_KEYS = "SEARCH_PROVIDER,LLM_MODEL,PARTNRA_MOCK_MODE"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
