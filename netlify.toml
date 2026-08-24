@@ -1,5 +1,14 @@
 [build]
-  command = "npm run build"
+  # The `rm -rf` after the build strips Turbopack's persistent build cache,
+  # which embeds real server-side env var values (e.g. API keys) into its own
+  # internal .sst files for incremental-build bookkeeping -- see the
+  # SECRETS_SCAN_OMIT_PATHS comment below for why. This also stops that cache
+  # (and the secret values inside it) from persisting into Netlify's
+  # cross-build cache storage at all, not just hiding it from the scanner.
+  # This project has no ISR/fetch-cache usage, so losing Turbopack's
+  # incremental-compile speedup between builds is an acceptable trade for
+  # not leaving API keys sitting in a build cache.
+  command = "npm run build && rm -rf .next/cache/turbopack"
   publish = ".next"
 
 [build.environment]
@@ -14,6 +23,17 @@
   # ANTHROPIC_API_KEY, YOUTUBE_API_KEY, APIFY_API_TOKEN, HUNTER_API_KEY),
   # which stay fully scanned.
   SECRETS_SCAN_OMIT_KEYS = "SEARCH_PROVIDER,LLM_MODEL,PARTNRA_MOCK_MODE,APIFY_INSTAGRAM_ACTOR_ID,APIFY_TIKTOK_ACTOR_ID"
+  # Next.js/Turbopack's persistent build cache embeds real server-side env
+  # var values (e.g. YOUTUBE_API_KEY) into its own internal .sst cache files
+  # for incremental-build invalidation bookkeeping. That cache directory is
+  # never served -- it isn't part of .next/server or .next/static and Netlify
+  # never deploys it to the CDN or function runtime, it only persists it
+  # between builds for speed. Omitting this PATH (not any key) keeps every
+  # real secret (SERPER_API_KEY, ANTHROPIC_API_KEY, YOUTUBE_API_KEY,
+  # APIFY_API_TOKEN, HUNTER_API_KEY) fully scanned everywhere that actually
+  # ships to users -- the compiled function bundle, static assets, and every
+  # repo file.
+  SECRETS_SCAN_OMIT_PATHS = ".netlify/.next/cache/**,.next/cache/**"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
