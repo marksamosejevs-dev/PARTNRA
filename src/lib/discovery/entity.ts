@@ -80,10 +80,75 @@ export function classifyPartnerType(item: SourceItem): CandidateType {
   return "Publisher";
 }
 
-/** An affiliate/partner program or advertiser signup page is itself an actionable next step -- more useful than a generic contact form. */
+/**
+ * Title phrasing that indicates the page itself IS an application/signup
+ * route -- not that the page merely discusses one. Deliberately excludes
+ * bare "sign in"/"login" (that presupposes an existing account, it isn't a
+ * new-application entry point) and requires an actual apply/join/register/
+ * signup/become verb alongside the program noun, so a review that happens
+ * to say "...and their affiliate partner program..." in passing doesn't
+ * qualify -- only a page whose own declared subject is the application.
+ */
+const APPLICATION_TITLE_PATTERNS: RegExp[] = [
+  /\baffiliate (program|sign[- ]?up|application|registration)\b/i,
+  /\bbecome an affiliate\b/i,
+  /\bjoin (our|the) affiliate\b/i,
+  /\bpartner (program|application)\b/i,
+  /\bbecome a partner\b/i,
+  /\badvertiser (sign[- ]?up|registration|application)\b/i,
+  /\bmerchant (sign[- ]?up|registration|application)\b/i,
+  /\bcreator (application|program sign[- ]?up)\b/i,
+  /\breseller (application|program)\b/i,
+  /\bdistributor (application|program)\b/i,
+  /\bbecome a (reseller|distributor)\b/i,
+];
+
+/**
+ * URL path segments that structurally identify a signup/application page --
+ * matched as a WHOLE path segment (split on "/"), never a substring, so
+ * "/affiliate-marketing-tips-for-beginners" or "/reviews/our-partners"
+ * don't false-positive just because they contain "affiliate" or "partners"
+ * somewhere in a longer slug.
+ */
+const APPLICATION_PATH_SLUGS = new Set([
+  "affiliate", "affiliates", "affiliate-program", "become-an-affiliate",
+  "affiliate-signup", "affiliate-sign-up", "affiliate-application", "affiliate-registration",
+  "partner", "partners", "partner-program", "partner-application", "become-a-partner",
+  "apply", "application", "applications",
+  "signup", "sign-up", "register", "registration",
+  "advertise", "advertisers", "advertiser-signup", "advertiser-registration",
+  "merchant", "merchants", "merchant-signup", "merchant-registration",
+  "reseller", "resellers", "reseller-application", "reseller-program",
+  "distributor", "distributors", "distributor-application", "distributor-program",
+  "creator-application", "creator-signup",
+]);
+
+function hasApplicationPathSlug(url: string): boolean {
+  try {
+    const segments = new URL(url).pathname.toLowerCase().split("/").filter(Boolean);
+    return segments.some((segment) => APPLICATION_PATH_SLUGS.has(segment));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An affiliate/partner/advertiser/merchant/creator/reseller signup or
+ * application page is itself an actionable next step -- more useful than a
+ * generic contact form. Only awarded when the page's OWN title declares
+ * itself as that application route, or its URL path is structurally one
+ * (e.g. /affiliate-program, /become-an-affiliate) -- never from snippet/
+ * body text alone, since a review or article merely *mentioning* a brand's
+ * affiliate program in passing is not itself an application route. When
+ * uncertain, this returns null rather than guessing.
+ */
+/** A page titled e.g. "Affiliate Program - Sign In" still names an existing-account login, not a new application, even though "affiliate program" also appears in the title -- this exclusion wins over any positive title match. */
+const SIGN_IN_TITLE_PATTERN = /\bsign[- ]?in\b|\blog[- ]?in\b/i;
+
 export function findApplicationUrl(item: SourceItem): string | null {
-  const text = `${item.title} ${item.snippet} ${item.url}`;
-  if (/affiliate program|become an affiliate|partner program|advertiser sign[- ]?up|\/affiliate|\/partners?\b|\/advertise/i.test(text)) {
+  if (SIGN_IN_TITLE_PATTERN.test(item.title)) return null;
+  const titleIsApplicationPage = APPLICATION_TITLE_PATTERNS.some((pattern) => pattern.test(item.title));
+  if (titleIsApplicationPage || hasApplicationPathSlug(item.url)) {
     return item.url;
   }
   return null;
