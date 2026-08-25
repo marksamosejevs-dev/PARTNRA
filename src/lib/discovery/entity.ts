@@ -115,6 +115,18 @@ function isNonEntityPlatformHost(hostname: string): boolean {
   return Array.from(NON_ENTITY_PLATFORM_HOSTS).some((h) => host === h || host.endsWith(`.${h}`));
 }
 
+/**
+ * A directory/ranking/profile page describes OTHER named entities, not
+ * the resolved entity's own commercial activity -- a page titled "Clifford
+ * Chance lawyer profile" resolves an entity from the page's OWN domain
+ * (e.g. legal500.com), but the professional-services keywords in that
+ * text describe Clifford Chance, not Legal500. Generic (not tied to any
+ * one industry's directory site) so it applies wherever this pattern
+ * shows up, not just legal directories.
+ */
+const DIRECTORY_OR_PROFILE_SIGNALS =
+  /\b(directory|rankings?|ranked|find a lawyer|find a firm|browse (?:law firms|lawyers|attorneys|firms)|firm profile|lawyer profile|attorney profile|company profile)\b/i;
+
 /** A PDF/document URL is evidence, not a commercial entity to resolve a partner from. */
 function isDocumentUrl(url: string): boolean {
   try {
@@ -166,6 +178,14 @@ export function classifyPartnerType(item: SourceItem): CandidateType {
   if (hostname && isNonEntityPlatformHost(hostname) && !item.entityName) return "Evidence source";
 
   const text = `${item.title} ${item.snippet}`;
+
+  // A directory/ranking/profile page's professional-services (or other
+  // role) keywords describe the THIRD PARTY it profiles, not the
+  // directory's own commercial activity -- checked before the keyword
+  // rules below so "Clifford Chance lawyer profile" doesn't make the
+  // resolved entity (the directory site itself) a "Professional services
+  // firm" just because the text it hosts is about one.
+  if (DIRECTORY_OR_PROFILE_SIGNALS.test(text)) return "Evidence source";
 
   // Strong, specific commercial-role signals win regardless of platform --
   // checked FIRST so e.g. a law firm's own YouTube video is never

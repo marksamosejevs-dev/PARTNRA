@@ -32,7 +32,8 @@ import { resolveCompetitorDomain, ResolvedCompetitor } from "@/lib/discovery/com
 import { fetchCategoryPool, classifyCategoryPool, StrategyFunnel } from "@/lib/discovery/categoryDiscovery";
 import { raceWithTimeout, withFallback, raceValueWithTimeout, StageTimeoutError } from "@/lib/discovery/timeout";
 import { createScanLogger } from "@/lib/discovery/scanLogger";
-import { DiscoverResponse, SourceItem, ClassifiedResult, NON_PARTNER_TYPES } from "@/lib/discovery/types";
+import { DiscoverResponse, SourceItem, ClassifiedResult } from "@/lib/discovery/types";
+import { qualifyOpportunity } from "@/lib/discovery/qualification";
 
 function buildBusinessContext(profile: BusinessProfile): BusinessContext {
   return {
@@ -572,19 +573,30 @@ export async function POST(request: NextRequest) {
 
     const deduped = dedupeCandidates(allClassified, intent);
 
-    // Competitor-owned infrastructure, a directly comparable/competing
-    // business, or a non-entity evidence source (see types.ts's
-    // NON_PARTNER_TYPES) is real, useful intelligence -- it's just never
-    // shown as an independent, recruitable Potential Partner. Kept out of
-    // the response's `candidates` (there's no separate "Competitor
-    // Intelligence" UI section to show them in without redesigning the
-    // site), but still counted here so the funnel log accounts for every
-    // candidate, not just the ones that made the final list. A candidate
-    // WITH a real potentialRelationship (e.g. a foreign professional-
-    // services firm that's also a plausible referral partner) stays in the
-    // partner list despite its primary role, since that secondary
-    // opportunity is exactly what potentialRelationship exists to surface.
-    const potentialPartners = deduped.filter((c) => !(c.type && NON_PARTNER_TYPES.has(c.type)) || c.potentialRelationship);
+    // ONE canonical qualification step for every candidate, regardless of
+    // which discovery/classification path produced it -- see
+    // qualification.ts. Competitor-owned infrastructure, a directly
+    // comparable/competing business, or a non-entity evidence source is
+    // real, useful intelligence, just never shown as an independent,
+    // recruitable Potential Partner (no separate "Competitor
+    // Intelligence" UI section to show it in without redesigning the
+    // site) -- but logged per-candidate below so a real run is auditable
+    // without guessing why something did or didn't make the list.
+    const qualifications = deduped.map((c) => ({ candidate: c, classification: qualifyOpportunity(c) }));
+    log.mark("candidate_qualifications", {
+      candidates: qualifications.map(({ candidate, classification }) => ({
+        name: candidate.name,
+        type: candidate.type,
+        relationshipDirection: candidate.relationshipDirection,
+        fitScore: candidate.fitScore,
+        evidenceConfidence: candidate.evidenceConfidence,
+        potentialRelationship: candidate.potentialRelationship,
+        classification,
+      })),
+    });
+    const potentialPartners = qualifications
+      .filter(({ classification }) => classification === "potential_partner")
+      .map(({ candidate }) => candidate);
     const excludedAsIntelligence = deduped.length - potentialPartners.length;
 
     // Full discovery -> classification funnel, logged once per scan so a
