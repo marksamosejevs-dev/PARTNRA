@@ -13,12 +13,12 @@ function isPrivateHostname(hostname: string): boolean {
 }
 
 /**
- * Normalizes a user-supplied competitor URL and rejects anything that isn't a
- * plausible public http(s) hostname. We never fetch this URL server-side
- * ourselves (evidence links open client-side), but we still refuse private/
- * internal targets before they end up embedded in search queries or logs.
+ * Normalizes a user-supplied brand URL (their own business) and rejects
+ * anything that isn't a plausible public http(s) hostname, before it ends up
+ * embedded in search queries, logs, or (via `fetchHomepageText`) an actual
+ * server-side fetch.
  */
-export function normalizeCompetitorUrl(raw: string): URL | null {
+export function normalizeBrandUrl(raw: string): URL | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 

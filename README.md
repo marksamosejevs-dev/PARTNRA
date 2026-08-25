@@ -1,30 +1,38 @@
 # PARTNRA website
 
-This is the PARTNRA marketing site, including the "find the affiliates already
-promoting your competitors" scanner on the homepage. This README assumes no
-prior coding experience.
+This is the PARTNRA marketing site, including the "tell PARTNRA what you
+sell, we'll find who can sell it" scanner on the homepage. This README
+assumes no prior coding experience.
 
 ## 1. What this site needs to work fully
 
 The website itself (all the text, sections, pricing, etc.) works with no setup
-at all. The one feature that needs extra configuration is the **competitor
-scanner** in the hero section — the box where a visitor types in a
-competitor's website and clicks "Find their affiliates".
+at all. The one feature that needs extra configuration is the **partner
+discovery scanner** in the hero section — the box where a visitor types in
+*their own* website and clicks "Find my partners". Behind the scenes it: (1)
+analyses that business, (2) automatically identifies a couple of real,
+comparable competitor brands, then (3) finds who's already promoting those
+competitors — the visitor never has to know or enter a competitor's URL
+themselves.
 
 That scanner needs two **required** outside services, plus three **optional**
 ones that add more coverage and contact details:
 
 **Required:**
 
-1. **A web search API**, so it can search the public web for evidence.
+1. **A web search API**, so it can search the public web for evidence, and
+   resolve the AI-suggested competitor names to real domains.
    We use **Serper** (a Google Search API).
    - Sign up at https://serper.dev/
    - Create an API key
    - This gives you a value for `SERPER_API_KEY`
 
-2. **An AI model API**, so it can read the search results and decide which
-   ones are real affiliate evidence (a promo code, an affiliate link, etc.)
-   versus just a random mention of the brand.
+2. **An AI model API**, used twice: once to read the visitor's own homepage
+   and identify their product category and comparable competitor brands, and
+   once to read the search results and decide which ones are real affiliate
+   evidence (a promo code, an affiliate link, etc.) versus just a random
+   mention of the brand. Both steps only ever name something they're
+   confident is real — never a guess presented as fact.
    We use **Anthropic (Claude)**.
    - Sign up at https://console.anthropic.com/
    - Create an API key
@@ -100,11 +108,11 @@ npm run dev
 
 Then open http://localhost:3000 in your browser.
 
-## 4. Testing the affiliate scanner
+## 4. Testing the partner discovery scanner
 
-**Without any API keys** (default): type a competitor URL into the hero
-scanner and click the button. You'll see "Search API is not configured." —
-this confirms the site is correctly refusing to fake results.
+**Without any API keys** (default): type any website into the hero scanner
+and click the button. You'll see "Search API is not configured." — this
+confirms the site is correctly refusing to fake results.
 
 **With a quick fake demo, no API keys needed:** in your `.env.local` file,
 set:
@@ -123,8 +131,9 @@ on in Netlify's production environment variables** — leave
 `.env.local` (add `YOUTUBE_API_KEY`, `APIFY_API_TOKEN`, and/or
 `HUNTER_API_KEY` too if you have them), make sure `PARTNRA_MOCK_MODE` is
 `false` or removed, restart the dev server, and try a real, well-known
-competitor domain. A real scan typically takes several seconds while it
-searches, verifies evidence, and looks up contact details.
+brand's own website (not a competitor's). A real scan typically takes several
+seconds while it analyses the business, identifies competitors, searches,
+verifies evidence, and looks up contact details.
 
 ## 5. How to tell if production is using real data or mock data
 
