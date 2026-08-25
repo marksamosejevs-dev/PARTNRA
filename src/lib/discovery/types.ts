@@ -8,7 +8,7 @@ export type EvidenceType =
 
 export type CandidateType = "Creator" | "Publisher" | "Reviewer" | "Site";
 
-export type SourceName = "Web" | "YouTube" | "Instagram" | "TikTok";
+export type SourceName = "Web" | "OpenAI" | "YouTube" | "Instagram" | "TikTok";
 
 export type ContactStatus = "found" | "not_found" | "not_attempted";
 

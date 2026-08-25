@@ -49,12 +49,24 @@ never show fake results as if they were real.
    - Create an API key
    - This gives you a value for `YOUTUBE_API_KEY`
 
-4. **Apify**, so the scanner also checks public Instagram and TikTok posts.
+4. **OpenAI**, so the scanner also runs an OpenAI Web Search pass (via the
+   Responses API) looking specifically for promo codes, affiliate links,
+   ambassador relationships and similar commercial signals.
+   - Sign up at https://platform.openai.com/
+   - Create an API key
+   - This gives you a value for `OPENAI_API_KEY`
+
+5. **Apify**, for public Instagram and TikTok posts. **Currently not called
+   by the live scan** even if configured — Apify's actor-run calls were the
+   confirmed cause of repeated production timeouts, and re-enabling them
+   needs a background-job setup this project doesn't have yet. Configuring
+   this key today has no effect; it's kept here so nothing needs to change
+   once that exists.
    - Sign up at https://console.apify.com/
    - Create an API token under Settings → Integrations
    - This gives you a value for `APIFY_API_TOKEN`
 
-5. **Hunter**, so verified candidates can show a real business email instead
+6. **Hunter**, so verified candidates can show a real business email instead
    of "Coming soon".
    - Sign up at https://hunter.io/
    - Create an API key
@@ -63,9 +75,9 @@ never show fake results as if they were real.
      verification, and only when a real business domain (not a social
      profile) is available — it never guesses or invents an email.
 
-If any of the three optional services is missing or fails, the scan still
-runs on whichever sources ARE available — it never fails the whole scan
-because one optional add-on isn't configured.
+If any of the optional services is missing or fails, the scan still runs on
+whichever sources ARE available — it never fails the whole scan because one
+optional add-on isn't configured.
 
 ## 2. Where to add these keys
 
@@ -85,7 +97,8 @@ runtime, kept out of the code itself so they're never publicly visible.
    | `ANTHROPIC_API_KEY` | (the key from Anthropic) |
    | `LLM_MODEL` | `claude-haiku-4-5-20251001` |
    | `YOUTUBE_API_KEY` | (optional — the key from Google Cloud) |
-   | `APIFY_API_TOKEN` | (optional — the token from Apify) |
+   | `OPENAI_API_KEY` | (optional — the key from OpenAI) |
+   | `APIFY_API_TOKEN` | (optional — the token from Apify; not currently used by the live scan, see above) |
    | `HUNTER_API_KEY` | (optional — the key from Hunter) |
    | `PARTNRA_MOCK_MODE` | `false` |
 

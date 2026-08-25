@@ -1,6 +1,11 @@
 import { promises as dns } from "dns";
+import { raceValueWithTimeout } from "./timeout";
 
 export class BusinessAnalysisError extends Error {}
+
+// Node's dns.lookup has no AbortSignal support, so it can hang far past any
+// of the bounded stage timeouts around it -- bound it explicitly instead.
+const DNS_LOOKUP_TIMEOUT_MS = 3_000;
 
 const MAX_HOMEPAGE_BYTES = 2_000_000;
 const MAX_BODY_TEXT_CHARS = 4000;
@@ -45,7 +50,11 @@ export interface HomepageText {
  */
 export async function fetchHomepageText(url: URL, signal: AbortSignal): Promise<HomepageText | null> {
   try {
-    const { address } = await dns.lookup(url.hostname);
+    const { address } = await raceValueWithTimeout(
+      dns.lookup(url.hostname),
+      DNS_LOOKUP_TIMEOUT_MS,
+      "homepage DNS lookup"
+    );
     if (isPrivateIp(address)) return null;
   } catch {
     return null;

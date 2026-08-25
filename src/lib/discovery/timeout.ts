@@ -58,3 +58,27 @@ export async function withFallback<T>(
     return fallback;
   }
 }
+
+/**
+ * Node's `dns.lookup` (and a few other Node APIs) predates AbortSignal
+ * support entirely, so it can't be wrapped by `raceWithTimeout` above. This
+ * races an arbitrary promise against a plain timer instead -- the
+ * underlying lookup keeps running in the background if the timer wins
+ * (harmless for a DNS query), but the caller is never left waiting on it
+ * unbounded, which the DNS checks in `route.ts` previously did.
+ */
+export function raceValueWithTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new StageTimeoutError(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
