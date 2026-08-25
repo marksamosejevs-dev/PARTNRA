@@ -17,10 +17,11 @@ export function FinalCTA() {
               Alex knows where to look.
             </p>
           </Reveal>
-          <Reveal delay={0.2} className="mt-12 flex justify-center">
-            <Button href="#audit" variant="secondary" size="lg">
-              Find them
+          <Reveal delay={0.2} className="mt-12 flex flex-col items-center gap-3">
+            <Button href="#pricing" variant="secondary" size="lg">
+              Choose your plan
             </Button>
+            <p className="text-sm text-ink/40">Plans from $49/month. Cancel anytime.</p>
           </Reveal>
         </div>
       </Container>

@@ -111,14 +111,14 @@ export function Header() {
 
           <div className="hidden lg:block">
             <a
-              href="#audit"
+              href="#pricing"
               onClick={(e: MouseEvent<HTMLAnchorElement>) => {
                 e.preventDefault();
-                scrollToHash("#audit");
+                scrollToHash("#pricing");
               }}
-              className="group inline-flex h-[72px] items-center justify-center gap-3 rounded-full bg-lime px-12 text-base font-semibold tracking-tight text-ink shadow-[0_0_0_0_rgba(199,255,53,0)] transition-all duration-200 ease-out will-change-transform hover:scale-[1.02] hover:brightness-110 hover:shadow-[0_0_32px_4px_rgba(199,255,53,0.45)] active:scale-[0.99]"
+              className="group inline-flex h-[72px] items-center justify-center gap-3 rounded-full bg-lime px-12 text-base font-semibold tracking-tight text-ink shadow-[0_0_0_0_rgba(199,255,53,0)] transition-all duration-200 ease-out will-change-transform hover:scale-[1.03] hover:brightness-110 hover:shadow-[0_0_32px_4px_rgba(199,255,53,0.45)] active:scale-[0.99]"
             >
-              Free audit
+              Choose your plan
               <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
             </a>
           </div>
@@ -171,12 +171,12 @@ export function Header() {
               </a>
             ))}
             <Button
-              href="#audit"
+              href="#pricing"
               variant="secondary"
               onClick={() => setMenuOpen(false)}
               className="mt-3 justify-center"
             >
-              Free affiliate audit
+              Choose your plan
             </Button>
           </nav>
         </Container>
