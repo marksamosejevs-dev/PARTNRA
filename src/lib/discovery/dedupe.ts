@@ -1,7 +1,14 @@
 import { Candidate, ClassifiedResult, SignalStrength } from "./types";
-import { computeFitScore } from "./entity";
+import { computeFitScore, evidenceConfidenceLabel } from "./entity";
 import { flagDuplicateEvidenceNetworks } from "./duplicateNetwork";
-import { PartnerTypeIntent } from "./classify";
+import { PartnerTypeIntent, NO_SNIPPET_PLACEHOLDER } from "./classify";
+
+/** Re-checked here (not carried as a separate field) against the FINAL merged evidence string -- a duplicate sighting can add real text a single sighting didn't have. Guards against the literal placeholder itself being long enough to look "sufficient" by length alone. */
+function evidenceLooksSufficient(evidence: string): boolean {
+  const trimmed = evidence.trim();
+  if (trimmed === NO_SNIPPET_PLACEHOLDER) return false;
+  return trimmed.length >= 20;
+}
 
 const STRENGTH_RANK: Record<SignalStrength, number> = { strong: 2, medium: 1, potential: 0 };
 
@@ -138,22 +145,28 @@ export function dedupeCandidates(items: ClassifiedResult[], intent?: PartnerType
     };
   }
 
-  // fitScore depends on the FINAL sourceCount and applicationUrl, both of
-  // which only settle once merging above is done -- recomputed here rather
-  // than trusting the per-item placeholder from classify.ts.
-  const withFinalFit = merged.map((c) => ({
-    ...c,
-    fitScore: computeFitScore({
-      signalStrength: c.signalStrength,
-      verified: c.verified,
-      type: c.type,
-      sourceCount: c.sourceCount,
-      hasApplicationRoute: !!c.applicationUrl,
-      prioritizedTypes: intent?.prioritized,
-      deprioritizedTypes: intent?.deprioritized,
-      relationshipDirection: c.relationshipDirection,
-    }),
-  }));
+  // fitScore/evidenceConfidence depend on the FINAL sourceCount,
+  // applicationUrl, and merged evidence text, which only settle once
+  // merging above is done -- recomputed here rather than trusting the
+  // per-item placeholder from classify.ts.
+  const withFinalFit = merged.map((c) => {
+    const sufficientEvidence = evidenceLooksSufficient(c.evidence);
+    return {
+      ...c,
+      evidenceConfidence: evidenceConfidenceLabel(c.signalStrength, c.verified, sufficientEvidence),
+      fitScore: computeFitScore({
+        signalStrength: c.signalStrength,
+        verified: c.verified,
+        type: c.type,
+        sourceCount: c.sourceCount,
+        hasApplicationRoute: !!c.applicationUrl,
+        prioritizedTypes: intent?.prioritized,
+        deprioritizedTypes: intent?.deprioritized,
+        relationshipDirection: c.relationshipDirection,
+        hasSufficientEvidence: sufficientEvidence,
+      }),
+    };
+  });
 
   // Cross-domain templated/doorway-network detection needs the full
   // deduplicated (one row per real entity) list to compare against -- runs

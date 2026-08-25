@@ -608,9 +608,34 @@ export async function POST(request: NextRequest) {
     // them and only ever count real AI-verified rejections.
     const verifiedTrueCount = allClassified.filter((c) => c.validCandidate && c.verified).length;
     const verifiedFalseCount = allClassified.filter((c) => c.validCandidate && !c.verified).length;
-    const removedByConfidence = allClassified.filter(
+    const belowMinConfidence = allClassified.filter(
       (c) => c.validCandidate && c.confidence < minConfidenceFor(c.signalStrength, c.verified)
-    ).length;
+    );
+    const removedByConfidence = belowMinConfidence.length;
+    const aiRejectedCandidates = allClassified.filter((c) => !c.validCandidate);
+    // Sample of the actual entities/reasons behind removedByConfidence and
+    // AI-rejected counts above, not just the totals -- this is what
+    // answers "why did entity X disappear" on a real scan without
+    // guessing; capped at 10 each to keep the log line a sane size.
+    log.mark("rejected_candidates_sample", {
+      belowMinimumConfidence: belowMinConfidence.slice(0, 10).map((c) => ({
+        name: c.name,
+        type: c.type,
+        relationshipDirection: c.relationshipDirection,
+        confidence: c.confidence,
+        requiredConfidence: minConfidenceFor(c.signalStrength, c.verified),
+        signalStrength: c.signalStrength,
+        verified: c.verified,
+        reason: c.reason,
+      })),
+      aiRejectedAsInvalid: aiRejectedCandidates.slice(0, 10).map((c) => ({
+        name: c.name,
+        type: c.type,
+        relationshipDirection: c.relationshipDirection,
+        confidence: c.confidence,
+        reason: c.reason,
+      })),
+    });
     const similarEvidenceNetworkFlagged = deduped.filter((c) => c.similarEvidenceNetwork).length;
     // Direction-based reclassification (see relationshipDirection.ts)
     // already happened upstream, before dedupe -- these counts are read

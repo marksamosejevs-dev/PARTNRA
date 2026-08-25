@@ -108,6 +108,19 @@ const NON_ENTITY_PLATFORM_HOSTS = new Set([
   "facebook.com",
   "pinterest.com",
   "quora.com",
+  // A YouTube/Instagram/TikTok URL discovered through the YouTube provider
+  // (source==="YouTube") always carries a real entityName (the channel
+  // title, see sources/youtube.ts) and so never hits this exclusion --
+  // this specifically catches the same URL surfacing through a DIFFERENT
+  // path (e.g. Serper's generic web search indexing a youtube.com result,
+  // source==="Web", no entityName), where deriving a name from the domain
+  // alone would fabricate the platform itself ("Youtube") as a fake
+  // partner entity.
+  "youtube.com",
+  "youtu.be",
+  "instagram.com",
+  "tiktok.com",
+  "google.com",
 ]);
 
 function isNonEntityPlatformHost(hostname: string): boolean {
@@ -387,6 +400,14 @@ export function computeFitScore(input: {
    * actually shows is a meaningful input to Fit, not just to the label.
    */
   relationshipDirection?: RelationshipDirection;
+  /**
+   * False when there's essentially no real title/snippet text behind
+   * this candidate (e.g. a bare channel name with no description) --
+   * category/type/strength signals alone shouldn't buy a normal Fit
+   * score when there's nothing substantive backing them. Defaults true
+   * so existing callers/tests that don't pass it are unaffected.
+   */
+  hasSufficientEvidence?: boolean;
 }): number {
   const strengthBase: Record<SignalStrength, number> = { strong: 60, medium: 45, potential: 28 };
   let score = strengthBase[input.signalStrength];
@@ -416,12 +437,25 @@ export function computeFitScore(input: {
     score = Math.min(score, 20);
   }
 
+  // A candidate with essentially no real evidence text shouldn't claim
+  // strong commercial relevance just because its category/type/strength
+  // signals look plausible -- capped, not zeroed, so a genuinely good
+  // company with thin evidence still surfaces as a low-confidence lead
+  // rather than fabricating confidence it hasn't earned.
+  if (input.hasSufficientEvidence === false) score = Math.min(score, 40);
+
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 /** Plain-language evidence confidence, kept separate from the numeric Fit score -- how sure we are the evidence itself is real, not how good a prospect it makes. */
-export function evidenceConfidenceLabel(signalStrength: SignalStrength, verified: boolean): "strong" | "medium" | "weak" {
-  if (!verified) return "weak";
+export function evidenceConfidenceLabel(
+  signalStrength: SignalStrength,
+  verified: boolean,
+  hasSufficientEvidence: boolean = true
+): "strong" | "medium" | "weak" {
+  // No real evidence text behind the candidate is weak evidence by
+  // definition, whatever a model or keyword match otherwise concluded.
+  if (!verified || !hasSufficientEvidence) return "weak";
   return signalStrength === "strong" ? "strong" : "medium";
 }
 

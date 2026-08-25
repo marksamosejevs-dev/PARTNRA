@@ -49,6 +49,24 @@ const PROFESSIONAL_REFERRAL_AUDIENCE =
 // compared against the entity's own name below.
 const THIRD_PARTY_POSSESSIVE_BRAND = /\b([A-Z][a-zA-Z0-9&]{2,})'s (affiliate|partner|referral) program\b/;
 
+// Educational/software-marketing content ABOUT the general concept of
+// referral/affiliate/partner programs -- "learn to leverage a financial
+// services partner program", "software to manage your affiliate program".
+// This entity's own business is providing tooling/content for OTHER
+// businesses' programs, not performing (or even having) one itself, and
+// isn't necessarily about any one named third-party brand either (so
+// THIRD_PARTY_POSSESSIVE_BRAND alone wouldn't catch it) -- still evidence,
+// not an active relationship.
+const SOFTWARE_OR_EDUCATIONAL_PROGRAM_CONTENT =
+  /\b(learn (?:to|how)|guide to|how to (?:build|create|run|start|set up)|manage your|track your|automate your|software for|platform for|solution for|leverage a)\b.{0,50}\b(referral|affiliate|partner)\s+program/i;
+
+// A B2B invitation phrased as "opportunities" rather than "program" --
+// common fintech/ecosystem partner marketing copy ("from referral
+// opportunities to embedded solutions") -- functionally the same positive
+// signal as PROFESSIONAL_REFERRAL_AUDIENCE's "program for professional
+// firms" language, just without the word "program".
+const REFERRAL_OPPORTUNITY_LANGUAGE = /\breferral opportunit(?:y|ies)\b/i;
+
 // A genuine affiliate network/media business's own homepage legitimately
 // says "join our network"/"our affiliate program" -- that's not the same
 // claim as a retail brand recruiting affiliates to sell ITS OWN product.
@@ -96,6 +114,14 @@ export function detectRelationshipDirection(item: SourceItem, resolvedEntityName
   const text = `${item.title} ${item.snippet}`;
   const entityToken = resolvedEntityName ? normalizedToken(resolvedEntityName) : "";
 
+  // Checked first and unconditionally: generic educational/software
+  // content about the CONCEPT of a referral/affiliate/partner program
+  // ("learn to leverage a financial services partner program") is
+  // evidence/content, not the entity performing or offering one -- this
+  // is true regardless of whether the text also happens to contain "our"
+  // or a bare "X Program" title.
+  if (SOFTWARE_OR_EDUCATIONAL_PROGRAM_CONTENT.test(text)) return "publishes_about";
+
   // Explainer/review/comparison language anywhere in the text is a safety
   // valve against both signals below: "our honest REVIEW OF the
   // Genoscience affiliate program" technically contains "our" ... "affiliate"
@@ -103,10 +129,11 @@ export function detectRelationshipDirection(item: SourceItem, resolvedEntityName
   // self-referential program page -- when in doubt here, prefer NOT
   // flagging self-promotion over wrongly demoting a genuine reviewer.
   const looksLikeOwnProgramPage =
-    !THIRD_PARTY_EXPLAINER_LANGUAGE.test(text) && (SELF_PROGRAM_LANGUAGE.test(text) || BARE_PROGRAM_TITLE.test(item.title));
+    !THIRD_PARTY_EXPLAINER_LANGUAGE.test(text) &&
+    (SELF_PROGRAM_LANGUAGE.test(text) || BARE_PROGRAM_TITLE.test(item.title) || REFERRAL_OPPORTUNITY_LANGUAGE.test(text));
 
   if (looksLikeOwnProgramPage && !NETWORK_OPERATOR_LANGUAGE.test(text)) {
-    if (PROFESSIONAL_REFERRAL_AUDIENCE.test(text)) return "accepts_referrals_from";
+    if (PROFESSIONAL_REFERRAL_AUDIENCE.test(text) || REFERRAL_OPPORTUNITY_LANGUAGE.test(text)) return "accepts_referrals_from";
     if (CONSUMER_AFFILIATE_AUDIENCE.test(text)) return "operates_affiliate_program";
     return "recruits_affiliates";
   }

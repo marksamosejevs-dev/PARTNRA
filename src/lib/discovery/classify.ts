@@ -145,6 +145,15 @@ function resolveDirection(
   return detected !== "unknown" ? detected : presumedDirection;
 }
 
+/** Shared with dedupe.ts's post-merge fitScore/evidenceConfidence recompute, which only has the merged `evidence` string to check -- exported so both sides recognize the exact same placeholder rather than each guessing at "looks empty". */
+export const NO_SNIPPET_PLACEHOLDER = "(no snippet available)";
+
+/** Essentially no real text to go on -- a bare title with no snippet at all (or a near-empty combined string) shouldn't buy normal Fit/Evidence Confidence just because a category/type match looked plausible. */
+function hasSufficientEvidence(source: SourceItem | undefined): boolean {
+  if (!source) return false;
+  return !!source.snippet && `${source.title} ${source.snippet}`.trim().length >= 20;
+}
+
 function buildCandidateFields(
   source: SourceItem | undefined,
   signalStrength: "strong" | "medium" | "potential",
@@ -156,13 +165,14 @@ function buildCandidateFields(
     ? resolveEntity(source)
     : { name: null, profileUrl: null, type: "Other" as const, applicationUrl: null };
   const relationshipDirection = resolveDirection(source, entity.name, presumedDirection);
+  const evidenceSufficient = hasSufficientEvidence(source);
 
   const base = {
     name: entity.name,
     type: entity.type,
     profileUrl: entity.profileUrl,
     applicationUrl: entity.applicationUrl,
-    evidenceConfidence: evidenceConfidenceLabel(signalStrength, verified),
+    evidenceConfidence: evidenceConfidenceLabel(signalStrength, verified, evidenceSufficient),
     // Placeholder using sourceCount:1 -- dedupe.ts recomputes this after
     // merging duplicate sightings, when the real sourceCount is known.
     fitScore: computeFitScore({
@@ -174,6 +184,7 @@ function buildCandidateFields(
       prioritizedTypes: intent?.prioritized,
       deprioritizedTypes: intent?.deprioritized,
       relationshipDirection,
+      hasSufficientEvidence: evidenceSufficient,
     }),
     // Cross-candidate templated/doorway-network detection can only run once
     // the full pool is assembled -- see dedupe.ts's flagDuplicateEvidenceNetworks,
@@ -325,6 +336,7 @@ Rules:
 - NEVER treat a shared keyword as category relevance -- e.g. "pellets" alone does not mean heating/fuel biomass pellets and BBQ smoker pellets are the same category; a law firm's compliance content does not mean it is a partner for every other regulated business. Judge the actual product/service/audience, not the word.
 - NEVER claim "Distributor fit" without a real, visible catalogue/product page as evidence -- not speculation about what a company might plausibly sell.
 - RELATIONSHIP DIRECTION -- "this company HAS an affiliate/referral program" is not the same claim as "this company CAN BE this business's partner". If the evidence is a brand's OWN page recruiting affiliates/referrers FOR ITSELF (e.g. "earn commission by referring researchers to [that same brand]", "join our affiliate program"), that brand is comparable-brand intelligence, not a partner -- mark validCandidate: false regardless of how strong the affiliate-program evidence itself looks. Likewise, a directory/database/software page that merely documents or explains ANOTHER named brand's program, without the page's own publisher showing active promotion or a real independent audience, is a weaker evidence source, not a direct partner -- reflect that honestly in confidence rather than promoting it to a high score just because it discusses partner programs. A genuine B2B referral invitation aimed at OTHER professional firms/businesses (not individual consumer affiliates) is a different, often valuable relationship -- do not lump it in with either of the above.
+- RECRUITABILITY IS MANDATORY, NOT OPTIONAL -- a research institute, academic platform, open-innovation network, or scientific community that shares topical/technical vocabulary with this business's category (the same compound, molecule, technology, or scientific term) is NOT automatically a commercial partner. Ask specifically: is there evidence of an actual commercial relationship route (a real audience it could promote to, a contact/application path, a business, not just research) -- if the evidence only shows scientific/topical overlap with no commercial angle at all, mark validCandidate: false regardless of how relevant the terminology looks.
 - Return exactly one classification per input result, referencing its index.`;
 }
 
@@ -567,7 +579,7 @@ export function scoreUnverified(
       platform: item.platform,
       sourceUrl: item.url,
       evidenceType: null,
-      evidence: item.snippet || "(no snippet available)",
+      evidence: item.snippet || NO_SNIPPET_PLACEHOLDER,
       signalStrength,
       verified,
       promoCode: null,
