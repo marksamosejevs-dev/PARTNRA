@@ -5,6 +5,18 @@ export class ClassifierError extends Error {}
 const EVIDENCE_TYPES = ["Promo code", "Affiliate link", "Referral", "Review", "Ambassador", "Partner"] as const;
 const CANDIDATE_TYPES = ["Creator", "Publisher", "Reviewer", "Site"] as const;
 
+/**
+ * Classification latency scales with how many items are in one call --
+ * both the input prompt and, more importantly, the structured output the
+ * model has to produce (one classification per item). A real deployed
+ * scan with a 29-item pool took long enough to exceed the per-stage
+ * timeout. Capping the AI call's input keeps it fast and predictable;
+ * scoreUnverified below can still score the FULL pool deterministically
+ * if the AI call doesn't complete in time, so nothing discovered is lost,
+ * only left unverified.
+ */
+export const MAX_CLASSIFY_INPUT = 15;
+
 const TOOL_NAME = "report_classifications";
 
 function buildSystemPrompt(brand: string, domain: string): string {
@@ -136,6 +148,7 @@ export async function classifyResults(
         // This classifier only ever validates a real relationship with the
         // named competitor brand itself — the strongest evidence tier.
         signalStrength: "strong",
+        verified: true,
         promoCode: typeof item.promoCode === "string" ? item.promoCode : null,
         confidence: typeof item.confidence === "number" ? item.confidence : 0,
         reason: typeof item.reason === "string" ? item.reason : "",
@@ -297,10 +310,65 @@ export async function classifyCategoryResults(
         evidenceType,
         evidence: typeof item.evidence === "string" ? item.evidence : "",
         signalStrength: CATEGORY_STRENGTH[evidenceType],
+        verified: true,
         promoCode: null,
         confidence: typeof item.confidence === "number" ? item.confidence : 0,
         reason: typeof item.reason === "string" ? item.reason : "",
       };
     })
     .filter((item): item is ClassifiedResult => item !== null && !!item.sourceUrl);
+}
+
+const UNVERIFIED_SIGNAL_WORDS = [
+  "promo code",
+  "discount code",
+  "affiliate",
+  "referral",
+  "partner",
+  "sponsored",
+  "ambassador",
+  "review",
+  "commission",
+  "use my code",
+];
+
+/**
+ * Deterministic, non-AI fallback for when real classification couldn't
+ * complete in time (or failed outright) -- exists so an already-discovered,
+ * real evidence pool is never simply thrown away just because Anthropic
+ * ranking ran out of budget. This is a plain keyword heuristic over the
+ * title/snippet already returned by a real provider (Serper/OpenAI/
+ * YouTube) -- no model reads or judges it, so every result is tagged
+ * verified: false and capped at a confidence well below any AI-verified
+ * band, and evidenceType is left null rather than asserted (never claim
+ * "Promo code" or "Affiliate link" without an LLM actually having read the
+ * evidence for it). validCandidate is always true here: these already
+ * passed real discovery, they just haven't been AI-judged, so there's no
+ * concept of the classifier "rejecting" one.
+ */
+export function scoreUnverified(items: SourceItem[]): ClassifiedResult[] {
+  return items.map((item) => {
+    const text = `${item.title} ${item.snippet}`.toLowerCase();
+    const matched = UNVERIFIED_SIGNAL_WORDS.filter((w) => text.includes(w));
+    const confidence = Math.min(30 + matched.length * 8, 55);
+
+    return {
+      validCandidate: true,
+      name: item.title || null,
+      type: item.source === "YouTube" ? "Creator" : null,
+      platform: item.platform,
+      profileUrl: item.profileUrl,
+      sourceUrl: item.url,
+      evidenceType: null,
+      evidence: item.snippet || "(no snippet available)",
+      signalStrength: "potential",
+      verified: false,
+      promoCode: null,
+      confidence,
+      reason:
+        matched.length > 0
+          ? `Not yet AI-verified — surfaced by search; the title/snippet mentions ${matched.slice(0, 2).join(", ")}.`
+          : "Not yet AI-verified — surfaced by search, shown as a lower-confidence lead pending full evidence review.",
+    };
+  });
 }

@@ -7,9 +7,15 @@ const STRENGTH_RANK: Record<SignalStrength, number> = { strong: 2, medium: 1, po
  * own prompt already enforces. Category-strategy evidence is inherently
  * softer (it's not tied to a named competitor), so it gets a lower bar --
  * still real evidence per classify.ts's own rules, just not held to the
- * same number as a direct competitor relationship.
+ * same number as a direct competitor relationship. Unverified (deterministic
+ * fallback, see classify.ts's scoreUnverified) results have no threshold at
+ * all here -- their confidence number is only ever a same-tier sort key
+ * among themselves, never a pass/fail gate, since by definition no model
+ * has judged them; they're kept, just always ranked below every verified
+ * result.
  */
-function minConfidenceFor(strength: SignalStrength): number {
+function minConfidenceFor(strength: SignalStrength, verified: boolean): number {
+  if (!verified) return 0;
   return strength === "strong" ? 70 : 60;
 }
 
@@ -59,7 +65,7 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
   const merged: Candidate[] = [];
 
   for (const item of items) {
-    if (!item.validCandidate || item.confidence < minConfidenceFor(item.signalStrength)) continue;
+    if (!item.validCandidate || item.confidence < minConfidenceFor(item.signalStrength, item.verified)) continue;
 
     const candidate: Candidate = {
       name: item.name,
@@ -71,6 +77,7 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       evidenceType: item.evidenceType,
       evidence: item.evidence,
       signalStrength: item.signalStrength,
+      verified: item.verified,
       promoCode: item.promoCode,
       contact: null,
       contactStatus: "not_attempted",
@@ -87,15 +94,19 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
     const existing = merged[existingIndex];
     // Strength first (a confirmed competitor relationship always outranks a
     // category-level signal, whatever the raw confidence numbers say -- the
-    // two scales aren't comparable), confidence only as the tiebreaker.
+    // two scales aren't comparable), then AI-verified over unverified at the
+    // same strength (a model actually judged one of them), confidence only
+    // as the final tiebreaker.
     const existingRank = STRENGTH_RANK[existing.signalStrength];
     const candidateRank = STRENGTH_RANK[candidate.signalStrength];
     const [primary, secondary] =
       candidateRank !== existingRank
         ? candidateRank > existingRank ? [candidate, existing] : [existing, candidate]
-        : candidate.confidence >= existing.confidence
-          ? [candidate, existing]
-          : [existing, candidate];
+        : candidate.verified !== existing.verified
+          ? candidate.verified ? [candidate, existing] : [existing, candidate]
+          : candidate.confidence >= existing.confidence
+            ? [candidate, existing]
+            : [existing, candidate];
 
     merged[existingIndex] = {
       ...primary,
@@ -110,6 +121,7 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
   return merged.sort(
     (a, b) =>
       STRENGTH_RANK[b.signalStrength] - STRENGTH_RANK[a.signalStrength] ||
+      Number(b.verified) - Number(a.verified) ||
       b.confidence - a.confidence ||
       b.sourceCount - a.sourceCount
   );

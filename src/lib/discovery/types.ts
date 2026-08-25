@@ -40,6 +40,15 @@ export interface Candidate {
   evidenceType: EvidenceType | null;
   evidence: string;
   signalStrength: SignalStrength;
+  /**
+   * True if an LLM actually read this evidence and judged it real.
+   * False means AI classification couldn't complete in time (or failed),
+   * so this candidate was scored by a deterministic, non-AI heuristic
+   * instead -- still real, already-discovered evidence, just not yet
+   * verified by a model. Always shown as clearly less confident than a
+   * verified result, never dressed up as equivalent.
+   */
+  verified: boolean;
   promoCode: string | null;
   contact: string | null;
   contactStatus: ContactStatus;

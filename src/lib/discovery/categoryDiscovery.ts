@@ -1,6 +1,6 @@
 import { BusinessProfile } from "./business";
 import { ClassifiedResult, SourceItem } from "./types";
-import { classifyCategoryResults } from "./classify";
+import { classifyCategoryResults, scoreUnverified, MAX_CLASSIFY_INPUT } from "./classify";
 import { discoverCategoryFromWeb } from "./sources/web";
 import { discoverCategoryFromOpenAI } from "./sources/openai";
 import { discoverCategoryFromYoutube } from "./sources/youtube";
@@ -78,15 +78,24 @@ export async function fetchCategoryPool(
 
 export interface CategoryClassifyResult {
   classified: ClassifiedResult[];
-  /** True only on a genuine infra-level failure (e.g. classifier down) -- never set just because evidence turned out to be weak or absent. */
-  infraFailed: boolean;
 }
 
 /**
  * Classifies an already-fetched category pool (see fetchCategoryPool).
- * Split out so the caller can decide, only after seeing how Strategy A did,
- * whether this -- comparatively the more expensive step -- is worth
- * spending at all.
+ * Kicked off concurrently with Strategy A's own classification, not after
+ * it -- classification is the single most expensive/slowest stage in the
+ * whole pipeline, and serializing two classify calls back-to-back is what
+ * exhausted a real deployed scan's request budget (Strategy A's timed out
+ * at 6s, then Strategy B's started with almost no budget left and was
+ * aborted almost immediately). Whether Strategy B's results are actually
+ * needed is decided by the caller after both finish, using signalStrength-
+ * based ranking -- not by gating whether this runs at all.
+ *
+ * Never throws except on the outer AbortError from the safety net with
+ * nothing to fall back on: if AI classification itself fails or times out
+ * but the pool is non-empty, it degrades to deterministic, clearly
+ * unverified scoring over the full pool (see classify.ts's scoreUnverified)
+ * rather than discarding real, already-discovered evidence.
  */
 export async function classifyCategoryPool(
   pool: SourceItem[],
@@ -96,22 +105,24 @@ export async function classifyCategoryPool(
   log: ReturnType<typeof createScanLogger>
 ): Promise<CategoryClassifyResult> {
   if (pool.length === 0) {
-    return { classified: [], infraFailed: false };
+    return { classified: [] };
   }
 
-  log.mark("category_classification_start", { poolSize: pool.length });
+  const classifyInput = pool.slice(0, MAX_CLASSIFY_INPUT);
+  log.mark("category_classification_start", { poolSize: pool.length, sentToAI: classifyInput.length });
   try {
     const classified = await raceWithTimeout(
-      (signal) => classifyCategoryResults(pool, category, signal),
+      (signal) => classifyCategoryResults(classifyInput, category, signal),
       classifyMs,
       "category classification",
       parentSignal
     );
-    log.mark("category_classification_end", { classified: classified.length });
-    return { classified, infraFailed: false };
+    log.mark("category_classification_end", { classified: classified.length, verified: true });
+    return { classified };
   } catch (err) {
-    log.fail("category_classification", err, { required: false });
-    if (err instanceof DOMException && err.name === "AbortError") throw err;
-    return { classified: [], infraFailed: true };
+    log.fail("category_classification", err);
+    const classified = scoreUnverified(pool);
+    log.mark("category_classification_end", { classified: classified.length, verified: false });
+    return { classified };
   }
 }
