@@ -29,6 +29,7 @@ export function getMockCandidates(brand: string): Candidate[] {
       similarEvidenceNetwork: false,
       similarEvidenceDomainCount: 0,
       potentialRelationship: null,
+      relationshipDirection: "promotes_brand",
       reason: "Named creator with a personalized discount code tied to the brand, corroborated across two platforms.",
     },
     {
@@ -52,6 +53,7 @@ export function getMockCandidates(brand: string): Candidate[] {
       similarEvidenceNetwork: false,
       similarEvidenceDomainCount: 0,
       potentialRelationship: null,
+      relationshipDirection: "promotes_brand",
       reason: "Outbound link carries an affiliate tracking parameter.",
     },
     {
@@ -75,6 +77,7 @@ export function getMockCandidates(brand: string): Candidate[] {
       similarEvidenceNetwork: false,
       similarEvidenceDomainCount: 0,
       potentialRelationship: null,
+      relationshipDirection: "promotes_brand",
       reason: "Disclosed partnership plus a dedicated discount page.",
     },
   ];

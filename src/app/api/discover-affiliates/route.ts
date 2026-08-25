@@ -600,6 +600,17 @@ export async function POST(request: NextRequest) {
       (c) => c.validCandidate && c.confidence < minConfidenceFor(c.signalStrength, c.verified)
     ).length;
     const similarEvidenceNetworkFlagged = deduped.filter((c) => c.similarEvidenceNetwork).length;
+    // Direction-based reclassification (see relationshipDirection.ts)
+    // already happened upstream, before dedupe -- these counts are read
+    // back from the final deduped list purely for funnel visibility, not
+    // recomputed. A self-promoting/documentation direction is exactly what
+    // pushed these candidates' `type` into NON_PARTNER_TYPES, so this is a
+    // subset of excludedAsIntelligence above, broken out so it's clear how
+    // much of the exclusion is specifically a direction call versus
+    // competitor-domain/evidence-source detection.
+    const excludedByRelationshipDirection = deduped.filter((c) =>
+      ["operates_affiliate_program", "recruits_affiliates", "publishes_about"].includes(c.relationshipDirection)
+    ).length;
     log.mark("funnel_summary", {
       totalCandidates: strategyAFunnel.totalCandidates + strategyBFunnel.totalCandidates,
       removedForDomainOrDuplicate: strategyAFunnel.deduplicated + strategyBFunnel.deduplicated,
@@ -613,6 +624,7 @@ export async function POST(request: NextRequest) {
       removedByMinimumConfidence: removedByConfidence,
       resolvedEntitiesAfterDedupe: deduped.length,
       excludedAsCompetitorInfrastructureOrEvidenceSource: excludedAsIntelligence,
+      excludedByRelationshipDirection,
       flaggedAsSimilarEvidenceNetwork: similarEvidenceNetworkFlagged,
       finalReturned: Math.min(potentialPartners.length, MAX_RESULTS_RETURNED),
       totalPotentialPartnersBeforeSlice: potentialPartners.length,

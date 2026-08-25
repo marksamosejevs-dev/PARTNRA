@@ -1,4 +1,4 @@
-import { CandidateType, NON_PARTNER_TYPES, SignalStrength, SourceItem } from "./types";
+import { CandidateType, NON_PARTNER_TYPES, RelationshipDirection, SignalStrength, SourceItem } from "./types";
 
 /**
  * A search result is evidence; the entity it's evidence FOR is the site,
@@ -339,6 +339,18 @@ const LOW_VALUE_TYPES = new Set<CandidateType>(["Coupon publisher"]);
  * this is where that difference actually changes the ranking, without any
  * per-domain branching in code.
  */
+const SELF_PROMOTION_OR_DOCUMENTATION_DIRECTIONS = new Set<RelationshipDirection>([
+  "operates_affiliate_program",
+  "recruits_affiliates",
+  "publishes_about",
+]);
+const CHANNEL_FIT_DIRECTIONS = new Set<RelationshipDirection>([
+  "accepts_referrals_from",
+  "refers_clients_to",
+  "distributes_brand",
+  "buys_product",
+]);
+
 export function computeFitScore(input: {
   signalStrength: SignalStrength;
   verified: boolean;
@@ -347,6 +359,14 @@ export function computeFitScore(input: {
   hasApplicationRoute: boolean;
   prioritizedTypes?: ReadonlySet<CandidateType>;
   deprioritizedTypes?: ReadonlySet<CandidateType>;
+  /**
+   * "This company HAS partners" and "this company CAN BE MY partner" are
+   * different claims -- see relationshipDirection.ts. A candidate should
+   * not score well merely because category keywords and an application
+   * page were found; the direction of the relationship the evidence
+   * actually shows is a meaningful input to Fit, not just to the label.
+   */
+  relationshipDirection?: RelationshipDirection;
 }): number {
   const strengthBase: Record<SignalStrength, number> = { strong: 60, medium: 45, potential: 28 };
   let score = strengthBase[input.signalStrength];
@@ -358,14 +378,23 @@ export function computeFitScore(input: {
   score += Math.min((input.sourceCount - 1) * 5, 15);
   score += input.hasApplicationRoute ? 10 : 0;
 
-  // Competitor-owned infrastructure, a directly comparable business, or a
-  // non-entity evidence source (see NON_PARTNER_TYPES) is never a normal
-  // "Potential Partner" opportunity, however strong its raw evidence looks
-  // -- this is a defense-in-depth cap, not the primary mechanism (route.ts
-  // excludes these from the Potential Partners list outright unless a real
-  // potentialRelationship applies; this just keeps the number honest if one
-  // ever surfaces elsewhere, e.g. in logs).
+  if (input.relationshipDirection === "supplies_product") score -= 12;
+  else if (input.relationshipDirection && CHANNEL_FIT_DIRECTIONS.has(input.relationshipDirection)) score += 10;
+
+  // Competitor-owned infrastructure, a directly comparable business, a
+  // non-entity evidence source (see NON_PARTNER_TYPES), or evidence that
+  // the entity merely operates its OWN program / documents someone
+  // else's is never a normal "Potential Partner" opportunity, however
+  // strong its raw evidence looks -- this is a defense-in-depth cap, not
+  // the primary mechanism (route.ts excludes NON_PARTNER_TYPES from the
+  // Potential Partners list outright, and relationshipDirection.ts's
+  // applyRelationshipDirection retypes self-promotion/documentation
+  // evidence into one of those types; this just keeps the number honest
+  // wherever it's read before or independent of that retyping).
   if (input.type && NON_PARTNER_TYPES.has(input.type)) score = Math.min(score, 20);
+  if (input.relationshipDirection && SELF_PROMOTION_OR_DOCUMENTATION_DIRECTIONS.has(input.relationshipDirection)) {
+    score = Math.min(score, 20);
+  }
 
   return Math.max(0, Math.min(100, Math.round(score)));
 }

@@ -69,6 +69,33 @@ export const NON_PARTNER_TYPES = new Set<CandidateType>([
   "Evidence source",
 ]);
 
+/**
+ * The direction of the commercial relationship the evidence actually
+ * shows -- distinct from WHETHER evidence exists at all. "This company
+ * operates an affiliate program" and "this company IS a partner the user
+ * should recruit" are not the same claim: a peptide brand's own affiliate
+ * page shows it *recruiting* affiliates for itself (operates_affiliate_program),
+ * not performing the Affiliate role for someone else. Kept deliberately
+ * small -- the useful distinction is just "is the entity performing the
+ * desired partner role, or the opposite/an unrelated one" -- not a full
+ * relationship-graph taxonomy.
+ */
+export const RELATIONSHIP_DIRECTIONS = [
+  "promotes_brand",
+  "distributes_brand",
+  "resells_brand",
+  "refers_clients_to",
+  "accepts_referrals_from",
+  "recruits_affiliates",
+  "operates_affiliate_program",
+  "supplies_product",
+  "buys_product",
+  "publishes_about",
+  "unknown",
+] as const;
+
+export type RelationshipDirection = (typeof RELATIONSHIP_DIRECTIONS)[number];
+
 export type SourceName = "Web" | "OpenAI" | "YouTube" | "Instagram" | "TikTok";
 
 export type ContactStatus = "found" | "not_found" | "not_attempted";
@@ -168,6 +195,15 @@ export interface Candidate {
    * secondary opportunity without collapsing them into one label.
    */
   potentialRelationship: string | null;
+  /**
+   * The direction of the commercial relationship the evidence actually
+   * shows (see RELATIONSHIP_DIRECTIONS) -- e.g. a brand's own affiliate
+   * page shows it RECRUITING affiliates ("operates_affiliate_program"),
+   * which is a different claim from the brand ITSELF performing the
+   * Affiliate role. "unknown" is an honest state when the direction isn't
+   * clearly determinable -- not itself a reason to exclude a candidate.
+   */
+  relationshipDirection: RelationshipDirection;
   reason: string;
 }
 

@@ -1,5 +1,6 @@
-import { CandidateType, ClassifiedResult, SourceItem } from "./types";
+import { CandidateType, ClassifiedResult, RelationshipDirection, SourceItem } from "./types";
 import { resolveEntity, computeFitScore, evidenceConfidenceLabel, classifyPartnerType } from "./entity";
+import { detectRelationshipDirection, applyRelationshipDirection } from "./relationshipDirection";
 
 export class ClassifierError extends Error {}
 
@@ -72,6 +73,7 @@ Rules:
 - NEVER infer an affiliate relationship purely from a brand mention. A normal customer review, a casual forum/comment, a news article, or an unrelated coupon-aggregator page is NOT sufficient — mark validCandidate: false.
 - Only set validCandidate: true when there is a personalized promo code, an affiliate/referral link, a disclosed ambassador/partner relationship, or a dedicated commercial review/video with a clear purchase/referral call to action.
 - A result that IS "${brand}"'s own official affiliate/partner program page (not a third party promoting it) still gets validCandidate: true here if it shows real affiliate-program evidence — route.ts separately reclassifies competitor-owned infrastructure after this step, so just judge the evidence honestly.
+- "This page has/documents/describes an affiliate program" is not the same claim as "this page's own publisher actively promotes ${brand}". A directory, database, or software page that merely lists or explains ${brand}'s program without itself showing active promotion (its own tracked link, its own review/content, its own commission activity) is weaker evidence — reflect that honestly in confidence/reason rather than treating documentation as equivalent to promotion.
 - confidence 90-100: explicit personalized promo code, affiliate disclosure, or referral link tied directly to the creator.
 - confidence 80-89: strong commercial recommendation plus a clear purchase/referral signal.
 - confidence 70-79: multiple promotional signals, but the affiliate relationship is not fully explicit.
@@ -119,16 +121,43 @@ export interface PartnerTypeIntent {
   deprioritized: ReadonlySet<CandidateType>;
 }
 
+/**
+ * `presumedDirection` is the strategy's own honest default -- e.g. an
+ * AI-confirmed Strategy A match already means "this entity promotes the
+ * named competitor" by construction (that's what classifyResults just
+ * validated), so "promotes_brand" isn't a guess there, it's what the
+ * classification step already established. `detectRelationshipDirection`
+ * then runs on top of that default and OVERRIDES it only when the
+ * evidence text itself contains an explicit, unambiguous reverse-direction
+ * signal (the entity's own "our affiliate program" language, or a
+ * third-party-documentation pattern) -- obvious reverse-direction evidence
+ * should win regardless of what the strategy assumed; ambiguous evidence
+ * should not, so the default holds instead of being replaced by a bare
+ * "unknown".
+ */
+function resolveDirection(
+  source: SourceItem | undefined,
+  resolvedName: string | null,
+  presumedDirection: RelationshipDirection
+): RelationshipDirection {
+  if (!source) return presumedDirection;
+  const detected = detectRelationshipDirection(source, resolvedName);
+  return detected !== "unknown" ? detected : presumedDirection;
+}
+
 function buildCandidateFields(
   source: SourceItem | undefined,
   signalStrength: "strong" | "medium" | "potential",
   verified: boolean,
+  presumedDirection: RelationshipDirection,
   intent?: PartnerTypeIntent
 ) {
   const entity = source
     ? resolveEntity(source)
     : { name: null, profileUrl: null, type: "Other" as const, applicationUrl: null };
-  return {
+  const relationshipDirection = resolveDirection(source, entity.name, presumedDirection);
+
+  const base = {
     name: entity.name,
     type: entity.type,
     profileUrl: entity.profileUrl,
@@ -144,6 +173,7 @@ function buildCandidateFields(
       hasApplicationRoute: !!entity.applicationUrl,
       prioritizedTypes: intent?.prioritized,
       deprioritizedTypes: intent?.deprioritized,
+      relationshipDirection,
     }),
     // Cross-candidate templated/doorway-network detection can only run once
     // the full pool is assembled -- see dedupe.ts's flagDuplicateEvidenceNetworks,
@@ -153,7 +183,13 @@ function buildCandidateFields(
     // Only ever set later, from a real evidence-based heuristic (see
     // route.ts) -- never guessed here at initial classification time.
     potentialRelationship: null,
+    relationshipDirection,
   };
+
+  // type/applicationUrl still need to reflect a self-promotion/
+  // documentation direction even when the fitScore cap above already
+  // applied -- entity type should describe the ENTITY, not the page.
+  return applyRelationshipDirection(base);
 }
 
 export async function classifyResults(
@@ -237,7 +273,11 @@ export async function classifyResults(
         promoCode: typeof item.promoCode === "string" ? item.promoCode : null,
         confidence: typeof item.confidence === "number" ? item.confidence : 0,
         reason: typeof item.reason === "string" ? item.reason : "",
-        ...buildCandidateFields(source, signalStrength, verified, intent),
+        // An AI-confirmed match here already means "promotes the named
+        // competitor" by construction -- the only thing left to check is
+        // whether the evidence text ALSO shows an explicit reverse-
+        // direction signal (see resolveDirection) that should override it.
+        ...buildCandidateFields(source, signalStrength, verified, "promotes_brand", intent),
       };
     })
     .filter((item) => item.sourceUrl);
@@ -284,6 +324,7 @@ Rules:
 - NEVER infer any of the three evidence types from a single generic brand/category mention, a news article, a forum comment, or an unrelated coupon-aggregator page.
 - NEVER treat a shared keyword as category relevance -- e.g. "pellets" alone does not mean heating/fuel biomass pellets and BBQ smoker pellets are the same category; a law firm's compliance content does not mean it is a partner for every other regulated business. Judge the actual product/service/audience, not the word.
 - NEVER claim "Distributor fit" without a real, visible catalogue/product page as evidence -- not speculation about what a company might plausibly sell.
+- RELATIONSHIP DIRECTION -- "this company HAS an affiliate/referral program" is not the same claim as "this company CAN BE this business's partner". If the evidence is a brand's OWN page recruiting affiliates/referrers FOR ITSELF (e.g. "earn commission by referring researchers to [that same brand]", "join our affiliate program"), that brand is comparable-brand intelligence, not a partner -- mark validCandidate: false regardless of how strong the affiliate-program evidence itself looks. Likewise, a directory/database/software page that merely documents or explains ANOTHER named brand's program, without the page's own publisher showing active promotion or a real independent audience, is a weaker evidence source, not a direct partner -- reflect that honestly in confidence rather than promoting it to a high score just because it discusses partner programs. A genuine B2B referral invitation aimed at OTHER professional firms/businesses (not individual consumer affiliates) is a different, often valuable relationship -- do not lump it in with either of the above.
 - Return exactly one classification per input result, referencing its index.`;
 }
 
@@ -385,6 +426,11 @@ export async function classifyCategoryResults(
 
       const signalStrength = CATEGORY_STRENGTH[evidenceType];
       const verified = true;
+      // The AI-assigned evidenceType already says roughly what kind of
+      // relationship this is; resolveDirection still overrides it when the
+      // evidence text itself carries an explicit reverse-direction signal.
+      const presumedDirection: RelationshipDirection =
+        evidenceType === "Category affiliate" ? "promotes_brand" : evidenceType === "Distributor fit" ? "distributes_brand" : "unknown";
       return {
         validCandidate: item.validCandidate === true,
         platform: source?.platform ?? "Web",
@@ -396,7 +442,7 @@ export async function classifyCategoryResults(
         promoCode: null,
         confidence: typeof item.confidence === "number" ? item.confidence : 0,
         reason: typeof item.reason === "string" ? item.reason : "",
-        ...buildCandidateFields(source, signalStrength, verified, intent),
+        ...buildCandidateFields(source, signalStrength, verified, presumedDirection, intent),
       };
     })
     .filter((item): item is ClassifiedResult => item !== null && !!item.sourceUrl);
@@ -530,7 +576,9 @@ export function scoreUnverified(
         matched.length > 0
           ? `Not yet AI-verified — surfaced by search; the title/snippet mentions ${matched.slice(0, 2).join(", ")}.`
           : "Not yet AI-verified — surfaced by search, shown as a lower-confidence lead pending full evidence review.",
-      ...buildCandidateFields(item, signalStrength, verified, intent),
+      // No AI-confirmed relationship to default to here -- pure text
+      // detection decides the direction, or it stays honestly "unknown".
+      ...buildCandidateFields(item, signalStrength, verified, "unknown", intent),
     };
   });
 }

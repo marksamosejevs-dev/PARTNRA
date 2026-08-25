@@ -93,6 +93,7 @@ export function dedupeCandidates(items: ClassifiedResult[], intent?: PartnerType
       similarEvidenceNetwork: false,
       similarEvidenceDomainCount: 0,
       potentialRelationship: item.potentialRelationship,
+      relationshipDirection: item.relationshipDirection,
       reason: item.reason,
     };
 
@@ -129,6 +130,10 @@ export function dedupeCandidates(items: ClassifiedResult[], intent?: PartnerType
       // keeping even if the primary (higher-ranked) sighting didn't have one.
       applicationUrl: primary.applicationUrl ?? secondary.applicationUrl,
       potentialRelationship: primary.potentialRelationship ?? secondary.potentialRelationship,
+      // Prefer whichever sighting actually determined a direction -- both
+      // start "unknown" by default, so that alone shouldn't win a merge.
+      relationshipDirection:
+        primary.relationshipDirection !== "unknown" ? primary.relationshipDirection : secondary.relationshipDirection,
       sourceCount: existing.sourceCount + 1,
     };
   }
@@ -146,6 +151,7 @@ export function dedupeCandidates(items: ClassifiedResult[], intent?: PartnerType
       hasApplicationRoute: !!c.applicationUrl,
       prioritizedTypes: intent?.prioritized,
       deprioritizedTypes: intent?.deprioritized,
+      relationshipDirection: c.relationshipDirection,
     }),
   }));
 
