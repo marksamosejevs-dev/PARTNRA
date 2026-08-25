@@ -117,3 +117,51 @@ export async function discoverCategoryFromOpenAI(
     return [];
   }
 }
+
+/**
+ * Business-understanding fallback for when a business's own homepage can't
+ * be fetched/parsed directly (JS-rendered shell, anti-bot page, blocked
+ * response, etc.) -- asks the model to answer from real web search results
+ * about the domain/brand rather than the (unreachable) page itself. Plain
+ * text answer, not source-item evidence: this exists to ground business
+ * analysis, not to surface partner evidence. Same optional, never-fatal
+ * contract as the other OpenAI sources -- returns null if unconfigured or
+ * on any failure.
+ */
+export async function fetchBusinessContextFromOpenAI(
+  brand: string,
+  domain: string,
+  signal: AbortSignal
+): Promise<string | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        input: `Using real web search, what does the company at the domain "${domain}" (also known as "${brand}") actually sell? Answer in one or two factual sentences based only on what you can actually find indexed about this specific company. If you cannot find real, specific information about it, say plainly that you found nothing rather than guessing or describing a generic/different company.`,
+        tools: [{ type: "web_search" }],
+      }),
+      signal,
+    });
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as ResponsesApiResponse;
+    const text = (data.output ?? [])
+      .flatMap((item) => item.content ?? [])
+      .map((part) => (typeof part.text === "string" ? part.text : ""))
+      .join(" ")
+      .trim();
+
+    return text || null;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    return null;
+  }
+}

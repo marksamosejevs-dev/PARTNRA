@@ -11,6 +11,7 @@ import { enrichContact, isHunterConfigured } from "@/lib/discovery/hunter";
 import { getMockCandidates } from "@/lib/discovery/mock";
 import {
   fetchHomepageText,
+  fetchBusinessContextFromWeb,
   identifyBusiness,
   isBusinessAnalysisConfigured,
   BusinessAnalysisError,
@@ -45,6 +46,11 @@ const OVERALL_SAFETY_NET_MS = 20_000;
 
 const DNS_LOOKUP_TIMEOUT_MS = 3_000;
 const HOMEPAGE_FETCH_TIMEOUT_MS = 4_000;
+// A bit more generous than the other source-timeout budgets: this one
+// fallback call now covers two Serper queries plus an OpenAI web-search
+// round trip (search + synthesize), run in parallel -- and it only ever
+// runs on the homepage-fetch-failure path, not on every scan.
+const BUSINESS_CONTEXT_SEARCH_TIMEOUT_MS = 6_000;
 const BUSINESS_ANALYSIS_TIMEOUT_MS = 7_000;
 const COMPETITOR_RESOLVE_TIMEOUT_MS = 3_500;
 const SOURCE_TIMEOUT_MS = 5_000;
@@ -293,22 +299,34 @@ export async function POST(request: NextRequest) {
   try {
     // Stage 1: understand what this business actually sells, grounded in
     // their real homepage content where we can fetch it. A fetch failure
-    // degrades to analysing from the domain-derived name alone rather than
-    // failing outright.
+    // falls back to a web search for the domain/brand instead of leaving
+    // business analysis with nothing but the bare domain name to guess from.
     log.mark("homepage_fetch_start");
     const page = await withFallback(
-      (signal) => fetchHomepageText(url, signal),
+      (signal) => fetchHomepageText(url, signal, log),
       HOMEPAGE_FETCH_TIMEOUT_MS,
       "homepage fetch",
       null
     );
     log.mark("homepage_fetch_end", { fetched: page !== null });
 
+    let searchContext: string | null = null;
+    if (!page) {
+      log.mark("business_context_search_start");
+      searchContext = await withFallback(
+        (signal) => fetchBusinessContextFromWeb(brand, domain, signal),
+        BUSINESS_CONTEXT_SEARCH_TIMEOUT_MS,
+        "business context web search",
+        null
+      );
+      log.mark("business_context_search_end", { found: searchContext !== null });
+    }
+
     let profile;
     log.mark("business_analysis_start");
     try {
       profile = await raceWithTimeout(
-        (signal) => identifyBusiness(brand, domain, page, signal),
+        (signal) => identifyBusiness(brand, domain, page, searchContext, signal),
         BUSINESS_ANALYSIS_TIMEOUT_MS,
         "business analysis",
         controller.signal
@@ -423,13 +441,27 @@ export async function POST(request: NextRequest) {
     // A hard error is reserved for genuine infrastructure failure across
     // every strategy actually attempted -- never for legitimately weak or
     // absent evidence, which still returns an honest (possibly empty)
-    // result below. (One known, pre-existing gap: if the required search
-    // provider itself is fully down, competitor resolution and the
-    // category fallback's web search both already degrade to "found
-    // nothing" rather than surfacing that as an infra failure here -- the
-    // structured logs above capture the real HTTP status/error either way.)
+    // result below. Confirmed root cause of an earlier false positive here:
+    // "competitors.length === 0" (no competitor names identified, or none
+    // resolved) and "!strategyBAttempted" (no category to fall back on
+    // either -- e.g. homepage fetch failed AND the web-search fallback
+    // above also found nothing to ground a category in) both mean "there
+    // was nothing to try", not "we tried and it broke". Those two
+    // "nothing to try" cases were being ANDed together into a false
+    // "everything failed", triggering this 502 for what should have been
+    // an honest empty result. Fixed by requiring that at least one
+    // strategy was actually attempted, and only counting an attempted
+    // strategy against this check if it specifically infra-failed.
+    // (One known, pre-existing gap: if the required search provider itself
+    // is fully down, competitor resolution and the category fallback's web
+    // search both already degrade to "found nothing" rather than
+    // surfacing that as an infra failure here -- the structured logs above
+    // capture the real HTTP status/error either way.)
+    const strategyAAttempted = competitors.length > 0;
+    const anyStrategyAttempted = strategyAAttempted || strategyBAttempted;
     const allAttemptsInfraFailed =
-      (competitors.length === 0 || strategyAInfraFailed) &&
+      anyStrategyAttempted &&
+      (!strategyAAttempted || strategyAInfraFailed) &&
       (!strategyBAttempted || strategyBInfraFailed) &&
       allClassified.length === 0;
 
