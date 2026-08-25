@@ -8,10 +8,10 @@ import { normalizeCompetitorUrl } from "@/lib/discovery/domain";
 import type { Candidate, DiscoverErrorResponse, DiscoverResponse } from "@/lib/discovery/types";
 
 const STAGES = [
-  "Analysing competitor...",
-  "Searching public affiliate signals...",
-  "Checking promo codes...",
-  "Looking for creators and publishers...",
+  "Analysing your market...",
+  "Finding brands like this one...",
+  "Finding people who already promote them...",
+  "Ranking potential partners...",
   "Verifying evidence...",
 ];
 
@@ -27,7 +27,7 @@ function IdlePreview() {
     <div className="mt-6 rounded-2xl border border-dashed border-ink/15 bg-surface/40 p-5 md:p-6">
       <div className="flex items-center justify-between">
         <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/40">
-          Affiliate signals
+          Partner signals
         </span>
         <span className="font-mono-label rounded-full bg-ink/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/40">
           Example preview
@@ -119,6 +119,7 @@ export function DiscoveryScanner() {
 
   const shown: Candidate[] = result?.candidates.slice(0, 3) ?? [];
   const moreCount = result ? Math.max(result.totalFound - shown.length, 0) : 0;
+  const strongCount = result?.candidates.filter((c) => c.confidence >= 85).length ?? 0;
 
   return (
     <div className="rounded-3xl border border-ink/10 bg-paper/80 p-5 md:p-8">
@@ -137,7 +138,7 @@ export function DiscoveryScanner() {
           disabled={phase === "scanning"}
           className="group inline-flex h-14 shrink-0 items-center justify-center gap-2.5 rounded-full bg-lime px-8 text-base font-semibold text-ink shadow-[0_0_0_0_rgba(199,255,53,0)] transition-all duration-200 ease-out hover:scale-[1.02] hover:brightness-110 hover:shadow-[0_0_32px_4px_rgba(199,255,53,0.45)] active:scale-[0.99] disabled:pointer-events-none disabled:opacity-60 md:h-16 md:px-10 md:text-lg"
         >
-          {phase === "scanning" ? "Scanning..." : "Find their affiliates"}
+          {phase === "scanning" ? "Scanning..." : "Find their partners"}
           {phase !== "scanning" && (
             <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
           )}
@@ -169,10 +170,10 @@ export function DiscoveryScanner() {
       {phase === "empty" && (
         <div className="mt-6 rounded-2xl border border-ink/10 bg-surface/40 p-6 text-center">
           <p className="font-display text-xl font-medium tracking-tight text-ink">
-            No strong affiliate signals found.
+            No strong partner signals found.
           </p>
           <p className="mt-2 text-sm text-ink/55">
-            Try another competitor or a larger brand with a more established affiliate presence.
+            Try another competitor or a larger brand with a more established partner presence.
           </p>
           <button
             type="button"
@@ -189,8 +190,13 @@ export function DiscoveryScanner() {
         <div className="mt-6">
           <div className="flex flex-wrap items-center gap-3">
             <span className="font-display text-xl font-medium tracking-tight text-ink">
-              {shown.length} potential {shown.length === 1 ? "affiliate" : "affiliates"} found
+              {shown.length} potential {shown.length === 1 ? "partner" : "partners"} found
             </span>
+            {strongCount > 0 && (
+              <span className="font-mono-label rounded-full bg-lime/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/70">
+                {strongCount} strong match{strongCount === 1 ? "" : "es"}
+              </span>
+            )}
             {result.mock && (
               <span className="font-mono-label rounded-full bg-ink/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/40">
                 Demo data
@@ -215,8 +221,8 @@ export function DiscoveryScanner() {
               </p>
               <p className="mt-1 text-sm text-paper/55">
                 {moreCount > 0
-                  ? `${moreCount} more signal${moreCount === 1 ? "" : "s"} found. Unlock more competitor scans, affiliate discovery and recruitment tools with PARTNRA.`
-                  : "Unlock more competitor scans, affiliate discovery and recruitment tools with PARTNRA."}
+                  ? `${moreCount} more signal${moreCount === 1 ? "" : "s"} found. Unlock more competitor scans, partner discovery and recruitment tools with PARTNRA.`
+                  : "Unlock more competitor scans, partner discovery and recruitment tools with PARTNRA."}
               </p>
             </div>
             <a

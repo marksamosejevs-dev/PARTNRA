@@ -7,7 +7,7 @@ const BENEFITS = [
     n: "01",
     title: "Find",
     headline: "Find people already promoting your competitors.",
-    detail: "Stop starting affiliate recruitment from zero.",
+    detail: "Stop starting partner recruitment from zero.",
   },
   {
     n: "02",
@@ -19,7 +19,7 @@ const BENEFITS = [
     n: "03",
     title: "Prioritise",
     headline: "Know who to contact first.",
-    detail: "Affiliate scoring separates strong prospects from noise.",
+    detail: "PARTNRA fit scoring separates strong prospects from noise.",
   },
   {
     n: "04",
@@ -42,8 +42,8 @@ const BENEFITS = [
   {
     n: "07",
     title: "Recruit",
-    headline: "Turn competitor affiliates into your partners.",
-    detail: "Then manage them using your existing affiliate infrastructure.",
+    headline: "Turn competitor promoters into your partners.",
+    detail: "Then manage them using your existing partner programme.",
   },
 ];
 

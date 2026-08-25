@@ -12,23 +12,24 @@ export function Hero() {
         <div className="grid grid-cols-1 gap-10 lg:grid-cols-[1.35fr_1fr] lg:gap-10">
           <div>
             <Reveal>
-              <SectionLabel>AI Affiliate Recruitment for E-commerce</SectionLabel>
+              <SectionLabel>AI Partner Discovery for E-commerce</SectionLabel>
             </Reveal>
 
             <Reveal delay={0.08}>
               <h1 className="font-display mt-4 max-w-2xl text-[clamp(2.25rem,3.6vw,3.5rem)] font-medium leading-[1.08] tracking-tight text-ink">
-                Find the affiliates
+                Tell PARTNRA what you sell.
                 <br />
-                already promoting
+                We&rsquo;ll find the people
                 <br />
-                your competitors.
+                who can sell it.
               </h1>
             </Reveal>
 
             <Reveal delay={0.16}>
               <p className="mt-4 max-w-xl text-base leading-relaxed text-ink/55 md:text-lg">
-                Enter a competitor. PARTNRA searches public web signals to find creators,
-                publishers, promo codes and affiliate placements already connected to them.
+                PARTNRA discovers potential partners across the web, identifies who already
+                promotes similar brands, ranks the strongest opportunities and helps you turn
+                them into active partners.
               </p>
             </Reveal>
 

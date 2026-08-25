@@ -21,7 +21,7 @@ const WITHOUT = [
 const WITH = [
   { text: "Enter yourstore.com", mono: true },
   { text: "Alex researches the market." },
-  { text: "427 potential affiliates found." },
+  { text: "427 potential partners found." },
   { text: "37 high-intent prospects." },
   { text: "Contacts identified." },
   { text: "Personalised recruitment prepared." },

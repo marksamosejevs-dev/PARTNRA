@@ -3,7 +3,7 @@ import { Reveal } from "./ui/Reveal";
 
 const LINES = [
   "You sell products.",
-  "Your competitors have affiliates.",
+  "Your competitors have partners.",
   "PARTNRA finds them.",
   "Alex helps recruit them.",
 ];

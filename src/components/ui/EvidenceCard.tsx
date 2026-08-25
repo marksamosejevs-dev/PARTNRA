@@ -56,7 +56,12 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
         </div>
       )}
 
-      <p className="mt-4 text-base leading-relaxed text-ink/70">{candidate.evidence}</p>
+      <div className="mt-4">
+        <div className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/40">
+          Why PARTNRA found this
+        </div>
+        <p className="mt-1.5 text-base leading-relaxed text-ink/70">{candidate.evidence}</p>
+      </div>
 
       {candidate.promoCode && (
         <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-ink/10 bg-surface/60 px-3 py-1.5">

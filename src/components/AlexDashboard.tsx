@@ -16,9 +16,9 @@ const METRICS = [
 ];
 
 const ACTIVITY = [
-  { time: "21:04", text: "Affiliate detected promoting Competitor A" },
+  { time: "21:04", text: "Partner detected promoting Competitor A" },
   { time: "21:06", text: "Business contact identified" },
-  { time: "21:08", text: "Affiliate score: 94" },
+  { time: "21:08", text: "PARTNRA fit: 94" },
   { time: "21:09", text: "Outreach prepared" },
   { time: "21:17", text: "Reply received" },
 ];

@@ -1,7 +1,7 @@
 import { Container } from "./ui/Container";
 import { Reveal } from "./ui/Reveal";
 
-const PARTNRA_STAGES = ["Find", "Research", "Qualify", "Contact", "Recruit"];
+const PARTNRA_STAGES = ["Discover", "Research", "Rank", "Contact", "Recruit"];
 const PLATFORM_STAGES = ["Track", "Attribute", "Calculate", "Pay"];
 
 export function WhyNotAwin() {

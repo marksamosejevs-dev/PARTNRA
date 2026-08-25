@@ -23,16 +23,18 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 const siteUrl = "https://partnra.ai";
-const title = "PARTNRA — Your AI Affiliate Manager";
+const title = "PARTNRA — AI Partner Discovery for E-commerce";
 const description =
-  "Find creators, publishers and affiliates already promoting your competitors. PARTNRA helps e-commerce brands discover, qualify and recruit their next partners.";
+  "Tell PARTNRA what you sell. We'll find the creators, publishers and partners already promoting your competitors, rank the strongest opportunities and help you recruit them.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title,
   description,
   keywords: [
-    "AI affiliate manager",
+    "AI partner discovery",
+    "partner acquisition software",
+    "find partners",
     "affiliate recruitment software",
     "find affiliates",
     "affiliate discovery",
@@ -42,9 +44,9 @@ export const metadata: Metadata = {
     "supplement affiliate marketing",
   ],
   openGraph: {
-    title: "PARTNRA — AI Affiliate Recruitment",
+    title: "PARTNRA — AI Partner Discovery",
     description:
-      "Find the affiliates already selling your competitors. Then recruit them for your brand.",
+      "Find the partners already selling your competitors. Then recruit them for your brand.",
     url: siteUrl,
     siteName: "PARTNRA",
     images: [{ url: "/brand/partnra-icon-1024x1024.png", width: 1024, height: 1024 }],
@@ -53,9 +55,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "PARTNRA — AI Affiliate Recruitment",
+    title: "PARTNRA — AI Partner Discovery",
     description:
-      "Find the affiliates already selling your competitors. Then recruit them for your brand.",
+      "Find the partners already selling your competitors. Then recruit them for your brand.",
     images: ["/brand/partnra-icon-1024x1024.png"],
   },
   icons: {

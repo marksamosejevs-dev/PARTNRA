@@ -26,7 +26,7 @@ export function WhyNotHireManager() {
 
         <Reveal delay={0.1}>
           <p className="mt-8 max-w-2xl text-lg leading-relaxed text-ink/60 md:text-xl">
-            Affiliate teams spend significant time researching prospects, checking
+            Partnership teams spend significant time researching prospects, checking
             profiles, finding contacts, preparing outreach and maintaining spreadsheets.
             Alex handles repetitive research so people can focus on relationships,
             strategy and decisions.

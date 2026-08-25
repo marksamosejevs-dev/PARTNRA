@@ -7,7 +7,7 @@ export function MeetAlex() {
     <div className="pt-24 pb-16 md:pt-32 md:pb-20">
       <Container>
         <Reveal>
-          <SectionLabel tone="paper">AI Affiliate Manager</SectionLabel>
+          <SectionLabel tone="paper">AI Partner Manager</SectionLabel>
         </Reveal>
 
         <Reveal delay={0.06}>
@@ -18,15 +18,15 @@ export function MeetAlex() {
 
         <Reveal delay={0.12}>
           <p className="font-display mt-2 text-[clamp(1.4rem,3.4vw,2.3rem)] font-medium leading-[1.1] tracking-tight text-paper/40">
-            Your AI Affiliate Manager.
+            Your AI Partner Manager.
           </p>
         </Reveal>
 
         <Reveal delay={0.2}>
           <p className="mt-8 max-w-xl text-lg leading-relaxed text-paper/60 md:text-xl">
-            Tell Alex what you sell. Alex researches your market, finds people already
-            promoting competing products, qualifies them and prepares recruitment
-            opportunities.
+            Tell Alex what you sell. Alex researches your market, finds the people already
+            promoting similar products, ranks the strongest opportunities and prepares them
+            for outreach.
           </p>
         </Reveal>
 
