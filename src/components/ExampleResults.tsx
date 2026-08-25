@@ -19,7 +19,10 @@ const EXAMPLE_CANDIDATES: Candidate[] = [
     promoCode: "MARCUS20",
     contact: "marcus@creatorpartnerships.example",
     contactStatus: "found",
+    evidenceConfidence: "strong",
     confidence: 94,
+    fitScore: 91,
+    applicationUrl: null,
     reason: "Named creator with a personalized discount code, corroborated across two platforms.",
   },
   {
@@ -36,7 +39,10 @@ const EXAMPLE_CANDIDATES: Candidate[] = [
     promoCode: null,
     contact: null,
     contactStatus: "not_found",
+    evidenceConfidence: "strong",
     confidence: 85,
+    fitScore: 80,
+    applicationUrl: null,
     reason: "Outbound link carries an affiliate tracking parameter.",
   },
   {
@@ -53,7 +59,10 @@ const EXAMPLE_CANDIDATES: Candidate[] = [
     promoCode: null,
     contact: null,
     contactStatus: "not_attempted",
+    evidenceConfidence: "strong",
     confidence: 79,
+    fitScore: 84,
+    applicationUrl: null,
     reason: "Disclosed partnership plus a dedicated discount page.",
   },
 ];

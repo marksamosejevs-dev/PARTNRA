@@ -9,7 +9,21 @@ export type EvidenceType =
   | "Category review"
   | "Distributor fit";
 
-export type CandidateType = "Creator" | "Publisher" | "Reviewer" | "Site";
+/** The kind of partnership entity this is -- not the kind of evidence found (see EvidenceType). "Other" is an honest fallback for a real entity that doesn't fit these buckets, never guessed into a more specific one it can't support. */
+export type CandidateType =
+  | "Creator"
+  | "Affiliate"
+  | "Publisher"
+  | "Review site"
+  | "Newsletter"
+  | "Coupon publisher"
+  | "Retailer"
+  | "Distributor"
+  | "Reseller"
+  | "Marketplace"
+  | "Community"
+  | "Agency"
+  | "Other";
 
 export type SourceName = "Web" | "OpenAI" | "YouTube" | "Instagram" | "TikTok";
 
@@ -52,7 +66,28 @@ export interface Candidate {
   promoCode: string | null;
   contact: string | null;
   contactStatus: ContactStatus;
+  /**
+   * How strongly Partnra has verified the underlying evidence/relationship
+   * -- a plain label derived from signalStrength + verified, shown
+   * separately from fitScore so the two concepts are never collapsed into
+   * one percentage. "weak" always means unverified (deterministic
+   * fallback), regardless of signalStrength.
+   */
+  evidenceConfidence: "strong" | "medium" | "weak";
+  /** Raw numeric confidence behind evidenceConfidence -- kept for internal ranking/thresholds, not the number shown as the headline score anymore (see fitScore). */
   confidence: number;
+  /**
+   * How attractive/relevant this entity is as a partner prospect, given
+   * the evidence found -- distinct from evidenceConfidence. A transparent
+   * weighted sum over real signals (signal strength, partner type,
+   * corroborating source count, an actionable application route), never a
+   * black-box score. Two candidates with identical evidence strength can
+   * still have very different fit if one is a generic coupon aggregator
+   * and the other has real affiliate infrastructure in the target category.
+   */
+  fitScore: number;
+  /** A real affiliate/partner-program signup page found in the evidence itself, if any -- often more actionable than a generic contact email. Never fabricated; null when no such page was found. */
+  applicationUrl: string | null;
   reason: string;
 }
 
@@ -68,6 +103,8 @@ export interface SourceItem {
   url: string;
   profileUrl: string | null;
   snippet: string;
+  /** A real, authoritative entity name from the provider itself (e.g. a YouTube channel title) -- preferred over guessing one from the domain. Absent when the provider has no such identity (Serper/OpenAI web results). */
+  entityName?: string;
 }
 
 /** Raw shape the LLM classifier is forced to return for a single source item. */

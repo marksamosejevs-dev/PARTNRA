@@ -1,6 +1,12 @@
 import { BusinessProfile } from "./business";
 import { ClassifiedResult, SourceItem } from "./types";
-import { classifyCategoryResults, scoreUnverified, MAX_CLASSIFY_INPUT } from "./classify";
+import {
+  classifyCategoryResults,
+  scoreUnverified,
+  scoreUnverifiedIfSignal,
+  sampleAcrossSources,
+  MAX_CLASSIFY_INPUT,
+} from "./classify";
 import { discoverCategoryFromWeb } from "./sources/web";
 import { discoverCategoryFromOpenAI } from "./sources/openai";
 import { discoverCategoryFromYoutube } from "./sources/youtube";
@@ -76,8 +82,22 @@ export async function fetchCategoryPool(
   return { pool, itemsSearched: combined.length };
 }
 
+/** Per-strategy counts for the exact discovery->classification funnel -- same shape used by route.ts for Strategy A, logged so a real deployed run can be audited stage by stage. */
+export interface StrategyFunnel {
+  totalCandidates: number;
+  deduplicated: number;
+  sentToAI: number;
+  aiClassified: number;
+  /** Classification call itself failed/timed out -- the FULL pool was scored deterministically, not just AI-rejected items. */
+  timedOutFallbackScored: number;
+  /** AI call succeeded, but these specific items were rejected (validCandidate:false) or never sent (past the AI input cap) and got rescued because they still showed a real keyword signal. */
+  rescuedScored: number;
+  rejectedWeakEvidence: number;
+}
+
 export interface CategoryClassifyResult {
   classified: ClassifiedResult[];
+  funnel: StrategyFunnel;
 }
 
 /**
@@ -102,27 +122,49 @@ export async function classifyCategoryPool(
   category: string,
   parentSignal: AbortSignal,
   classifyMs: number,
-  log: ReturnType<typeof createScanLogger>
+  log: ReturnType<typeof createScanLogger>,
+  /** totalCandidates/deduplicated come from the earlier fetch+filter stages (fetchCategoryPool + the competitor-domain filter), which this function doesn't see directly -- passed in so the returned funnel covers the whole strategy, not just this stage. */
+  priorFunnel: { totalCandidates: number; deduplicated: number }
 ): Promise<CategoryClassifyResult> {
+  const funnel: StrategyFunnel = { ...priorFunnel, sentToAI: 0, aiClassified: 0, timedOutFallbackScored: 0, rescuedScored: 0, rejectedWeakEvidence: 0 };
+
   if (pool.length === 0) {
-    return { classified: [] };
+    return { classified: [], funnel };
   }
 
-  const classifyInput = pool.slice(0, MAX_CLASSIFY_INPUT);
+  const classifyInput = sampleAcrossSources(pool, MAX_CLASSIFY_INPUT);
+  const classifyInputUrls = new Set(classifyInput.map((i) => i.url));
+  const overflow = pool.filter((i) => !classifyInputUrls.has(i.url));
+  funnel.sentToAI = classifyInput.length;
+
   log.mark("category_classification_start", { poolSize: pool.length, sentToAI: classifyInput.length });
   try {
-    const classified = await raceWithTimeout(
+    const aiResult = await raceWithTimeout(
       (signal) => classifyCategoryResults(classifyInput, category, signal),
       classifyMs,
       "category classification",
       parentSignal
     );
-    log.mark("category_classification_end", { classified: classified.length, verified: true });
-    return { classified };
+    funnel.aiClassified = aiResult.length;
+
+    const aiRejectedUrls = new Set(aiResult.filter((r) => !r.validCandidate).map((r) => r.sourceUrl));
+    const rejectedItems = classifyInput.filter((item) => aiRejectedUrls.has(item.url));
+    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow]);
+    funnel.rescuedScored = rescued.length;
+    funnel.rejectedWeakEvidence = aiRejectedUrls.size + overflow.length - rescued.length;
+
+    const classified = [...aiResult, ...rescued];
+    log.mark("category_classification_end", {
+      aiClassified: aiResult.length,
+      validFromAI: aiResult.filter((r) => r.validCandidate).length,
+      rescued: rescued.length,
+    });
+    return { classified, funnel };
   } catch (err) {
     log.fail("category_classification", err);
     const classified = scoreUnverified(pool);
+    funnel.timedOutFallbackScored = classified.length;
     log.mark("category_classification_end", { classified: classified.length, verified: false });
-    return { classified };
+    return { classified, funnel };
   }
 }

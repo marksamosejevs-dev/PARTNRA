@@ -22,7 +22,10 @@ export function getMockCandidates(brand: string): Candidate[] {
       promoCode: "JAMES15",
       contact: "james@creatorpartnerships.example",
       contactStatus: "found",
+      evidenceConfidence: "strong",
       confidence: 92,
+      fitScore: 90,
+      applicationUrl: null,
       reason: "Named creator with a personalized discount code tied to the brand, corroborated across two platforms.",
     },
     {
@@ -39,7 +42,10 @@ export function getMockCandidates(brand: string): Candidate[] {
       promoCode: null,
       contact: null,
       contactStatus: "not_found",
+      evidenceConfidence: "strong",
       confidence: 81,
+      fitScore: 78,
+      applicationUrl: null,
       reason: "Outbound link carries an affiliate tracking parameter.",
     },
     {
@@ -56,7 +62,10 @@ export function getMockCandidates(brand: string): Candidate[] {
       promoCode: null,
       contact: null,
       contactStatus: "not_attempted",
+      evidenceConfidence: "strong",
       confidence: 76,
+      fitScore: 82,
+      applicationUrl: null,
       reason: "Disclosed partnership plus a dedicated discount page.",
     },
   ];

@@ -28,6 +28,12 @@ const SIGNAL_BADGE_CLASS: Record<SignalStrength, string> = {
   potential: "border border-ink/15 text-ink/50",
 };
 
+const EVIDENCE_CONFIDENCE_LABEL: Record<Candidate["evidenceConfidence"], string> = {
+  strong: "Evidence: Strong",
+  medium: "Evidence: Medium",
+  weak: "Evidence: Not yet AI-verified",
+};
+
 /**
  * `demo` marks example/placeholder candidates (the static ExampleResults
  * section, or a dev-mock scan) -- their actions never navigate anywhere or
@@ -47,7 +53,7 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
             {candidate.name ?? "Unnamed source"}
           </h3>
           <div className="mt-1 text-sm text-ink/45">
-            {[candidate.platform, candidate.type].filter(Boolean).join(" · ") || "Source"}
+            {[candidate.type, candidate.platform].filter(Boolean).join(" · ") || "Source"}
             {candidate.sourceCount > 1 && (
               <span className="ml-2 font-mono-label text-[11px] font-semibold uppercase tracking-[0.1em] text-ink/35">
                 +{candidate.sourceCount - 1} more source{candidate.sourceCount - 1 === 1 ? "" : "s"}
@@ -57,10 +63,10 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
         </div>
         <div className="text-right">
           <div className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/40">
-            Confidence
+            Partnra Fit
           </div>
           <div className="font-display mt-1 text-3xl font-medium tracking-tight text-ink">
-            <CountUp value={candidate.confidence} suffix="%" />
+            <CountUp value={candidate.fitScore} />
           </div>
         </div>
       </div>
@@ -78,18 +84,16 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
             </span>
           </div>
         )}
-        {!candidate.verified && (
-          <div className="inline-flex items-center gap-2 rounded-full border border-dashed border-ink/20 px-3 py-1">
-            <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/45">
-              Not yet AI-verified
-            </span>
-          </div>
-        )}
+        <div className="inline-flex items-center gap-2 rounded-full border border-ink/10 px-3 py-1">
+          <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/50">
+            {EVIDENCE_CONFIDENCE_LABEL[candidate.evidenceConfidence]}
+          </span>
+        </div>
       </div>
 
       <div className="mt-4">
         <div className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/40">
-          Why PARTNRA found this
+          Why PARTNRA found them
         </div>
         <p className="mt-1.5 text-base leading-relaxed text-ink/70">{candidate.evidence}</p>
       </div>
@@ -101,7 +105,7 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
         </div>
       )}
 
-      {!demo && !candidate.contact && (
+      {!demo && !candidate.contact && !candidate.applicationUrl && (
         <div className="mt-3 text-sm text-ink/40">
           Contact: {candidate.contactStatus === "not_found" ? "Not found" : "Coming soon"}
         </div>
@@ -134,15 +138,20 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
             onClick={() => setContactRevealed(true)}
             className={clsx(pillBase, contactRevealed ? pillActive : pillIdle)}
           >
-            {contactRevealed ? "Contact available in live results" : "Contact"}
+            {contactRevealed ? "Contact available in live results" : "Contact / Apply"}
           </button>
         ) : (
-          candidate.contact && (
+          // An affiliate/partner signup page found in the evidence itself is
+          // often a more useful next step than a generic email -- prefer it
+          // when both exist.
+          (candidate.applicationUrl || candidate.contact) && (
             <a
-              href={`mailto:${candidate.contact}`}
+              href={candidate.applicationUrl ?? `mailto:${candidate.contact}`}
+              target={candidate.applicationUrl ? "_blank" : undefined}
+              rel={candidate.applicationUrl ? "noopener noreferrer" : undefined}
               className="group inline-flex items-center gap-2 text-sm font-semibold text-ink transition-opacity hover:opacity-60"
             >
-              Contact
+              {candidate.applicationUrl ? "Contact / Apply" : "Contact"}
               <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
             </a>
           )

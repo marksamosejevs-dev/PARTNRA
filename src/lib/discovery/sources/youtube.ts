@@ -7,6 +7,7 @@ interface YoutubeSearchItem {
     title?: string;
     description?: string;
     channelId?: string;
+    channelTitle?: string;
   };
 }
 
@@ -38,6 +39,9 @@ async function searchYoutube(query: string, apiKey: string, signal: AbortSignal)
           ? `https://www.youtube.com/channel/${snippet.channelId}`
           : null,
         snippet: (snippet.description ?? "").slice(0, 300),
+        // The channel's real, authoritative name -- entity resolution
+        // prefers this over guessing an entity name from the video title.
+        ...(snippet.channelTitle ? { entityName: snippet.channelTitle } : {}),
       };
     })
     .filter((x): x is SourceItem => x !== null);

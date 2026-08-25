@@ -1,4 +1,5 @@
 import { Candidate, ClassifiedResult, SignalStrength } from "./types";
+import { computeFitScore } from "./entity";
 
 const STRENGTH_RANK: Record<SignalStrength, number> = { strong: 2, medium: 1, potential: 0 };
 
@@ -14,7 +15,7 @@ const STRENGTH_RANK: Record<SignalStrength, number> = { strong: 2, medium: 1, po
  * has judged them; they're kept, just always ranked below every verified
  * result.
  */
-function minConfidenceFor(strength: SignalStrength, verified: boolean): number {
+export function minConfidenceFor(strength: SignalStrength, verified: boolean): number {
   if (!verified) return 0;
   return strength === "strong" ? 70 : 60;
 }
@@ -81,7 +82,10 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       promoCode: item.promoCode,
       contact: null,
       contactStatus: "not_attempted",
+      evidenceConfidence: item.evidenceConfidence,
       confidence: item.confidence,
+      fitScore: item.fitScore, // recomputed below once sourceCount/applicationUrl are final
+      applicationUrl: item.applicationUrl,
       reason: item.reason,
     };
 
@@ -114,14 +118,32 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       evidence: primary.evidence === secondary.evidence
         ? primary.evidence
         : `${primary.evidence} ${secondary.evidence}`.trim(),
+      // A real affiliate/apply page found on either sighting is worth
+      // keeping even if the primary (higher-ranked) sighting didn't have one.
+      applicationUrl: primary.applicationUrl ?? secondary.applicationUrl,
       sourceCount: existing.sourceCount + 1,
     };
   }
 
-  return merged.sort(
+  // fitScore depends on the FINAL sourceCount and applicationUrl, both of
+  // which only settle once merging above is done -- recomputed here rather
+  // than trusting the per-item placeholder from classify.ts.
+  const withFinalFit = merged.map((c) => ({
+    ...c,
+    fitScore: computeFitScore({
+      signalStrength: c.signalStrength,
+      verified: c.verified,
+      type: c.type,
+      sourceCount: c.sourceCount,
+      hasApplicationRoute: !!c.applicationUrl,
+    }),
+  }));
+
+  return withFinalFit.sort(
     (a, b) =>
       STRENGTH_RANK[b.signalStrength] - STRENGTH_RANK[a.signalStrength] ||
       Number(b.verified) - Number(a.verified) ||
+      b.fitScore - a.fitScore ||
       b.confidence - a.confidence ||
       b.sourceCount - a.sourceCount
   );

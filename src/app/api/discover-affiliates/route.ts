@@ -5,8 +5,16 @@ import { normalizeBrandUrl, deriveBrandName } from "@/lib/discovery/domain";
 import { discoverFromWeb, isWebSearchConfigured, SearchProviderError } from "@/lib/discovery/sources/web";
 import { discoverFromOpenAI } from "@/lib/discovery/sources/openai";
 import { discoverFromYoutube } from "@/lib/discovery/sources/youtube";
-import { classifyResults, scoreUnverified, isClassifierConfigured, ClassifierError, MAX_CLASSIFY_INPUT } from "@/lib/discovery/classify";
-import { dedupeCandidates } from "@/lib/discovery/dedupe";
+import {
+  classifyResults,
+  scoreUnverified,
+  scoreUnverifiedIfSignal,
+  sampleAcrossSources,
+  isClassifierConfigured,
+  ClassifierError,
+  MAX_CLASSIFY_INPUT,
+} from "@/lib/discovery/classify";
+import { dedupeCandidates, minConfidenceFor } from "@/lib/discovery/dedupe";
 import { enrichContact, isHunterConfigured } from "@/lib/discovery/hunter";
 import { getMockCandidates } from "@/lib/discovery/mock";
 import {
@@ -17,7 +25,7 @@ import {
   BusinessAnalysisError,
 } from "@/lib/discovery/business";
 import { resolveCompetitorDomain, ResolvedCompetitor } from "@/lib/discovery/competitors";
-import { fetchCategoryPool, classifyCategoryPool } from "@/lib/discovery/categoryDiscovery";
+import { fetchCategoryPool, classifyCategoryPool, StrategyFunnel } from "@/lib/discovery/categoryDiscovery";
 import { raceWithTimeout, withFallback, raceValueWithTimeout, StageTimeoutError } from "@/lib/discovery/timeout";
 import { createScanLogger } from "@/lib/discovery/scanLogger";
 import { DiscoverResponse, SourceItem, ClassifiedResult } from "@/lib/discovery/types";
@@ -104,6 +112,10 @@ function mockModeEnabled(): boolean {
   return process.env.PARTNRA_MOCK_MODE === "true" && process.env.NODE_ENV !== "production";
 }
 
+function emptyFunnel(): StrategyFunnel {
+  return { totalCandidates: 0, deduplicated: 0, sentToAI: 0, aiClassified: 0, timedOutFallbackScored: 0, rescuedScored: 0, rejectedWeakEvidence: 0 };
+}
+
 function emptyResponse(
   brand: string,
   domain: string,
@@ -141,7 +153,7 @@ async function discoverForCompetitor(
   competitor: ResolvedCompetitor,
   parentSignal: AbortSignal,
   log: ReturnType<typeof createScanLogger>
-): Promise<{ classified: ClassifiedResult[]; itemsSearched: number }> {
+): Promise<{ classified: ClassifiedResult[]; itemsSearched: number; funnel: StrategyFunnel }> {
   log.mark("web_discovery_start", { domain: competitor.domain });
   log.mark("openai_discovery_start", { domain: competitor.domain });
   log.mark("youtube_discovery_start", { domain: competitor.domain });
@@ -181,6 +193,8 @@ async function discoverForCompetitor(
   log.mark("youtube_discovery_end", { domain: competitor.domain, found: youtube.length });
 
   const combined: SourceItem[] = [...webResult, ...openai, ...youtube];
+  const funnel = emptyFunnel();
+  funnel.totalCandidates = combined.length;
 
   if (combined.length === 0) {
     // Nothing came back from any source for this competitor. If web search
@@ -188,7 +202,7 @@ async function discoverForCompetitor(
     // results) and nothing else filled in either, that's the honest reason
     // to report -- but only now, once every alternative has had its chance.
     if (!webOutcome.ok) throw webOutcome.error;
-    return { classified: [], itemsSearched: 0 };
+    return { classified: [], itemsSearched: 0, funnel };
   }
 
   const pool: SourceItem[] = [];
@@ -206,37 +220,64 @@ async function discoverForCompetitor(
     pool.push(item);
     if (pool.length >= MAX_CANDIDATE_POOL) break;
   }
+  funnel.deduplicated = combined.length - pool.length;
 
   if (pool.length === 0) {
-    return { classified: [], itemsSearched: combined.length };
+    return { classified: [], itemsSearched: combined.length, funnel };
   }
 
   // Classification latency scales with pool size (both the prompt and,
   // more, the structured output the model has to produce). Cap what
-  // actually goes to the AI call for speed; if it doesn't finish in time,
-  // scoreUnverified below still scores the FULL pool deterministically, so
-  // a larger real discovery result is never simply discarded.
-  const classifyInput = pool.slice(0, MAX_CLASSIFY_INPUT);
+  // actually goes to the AI call for speed, sampled evenly across sources
+  // so a naive prefix slice can't silently exclude an entire provider (e.g.
+  // every YouTube item) just because Serper's results happened to come
+  // first in the combined pool.
+  const classifyInput = sampleAcrossSources(pool, MAX_CLASSIFY_INPUT);
+  const classifyInputUrls = new Set(classifyInput.map((i) => i.url));
+  const overflow = pool.filter((i) => !classifyInputUrls.has(i.url));
+  funnel.sentToAI = classifyInput.length;
+
   log.mark("classification_start", { domain: competitor.domain, poolSize: pool.length, sentToAI: classifyInput.length });
   let classified: ClassifiedResult[];
   try {
-    classified = await raceWithTimeout(
+    const aiResult = await raceWithTimeout(
       (signal) => classifyResults(classifyInput, competitor.name, competitor.domain, signal),
       CLASSIFY_TIMEOUT_MS,
       `AI classification (${competitor.domain})`,
       parentSignal
     );
-    log.mark("classification_end", { domain: competitor.domain, classified: classified.length, verified: true });
+    funnel.aiClassified = aiResult.length;
+
+    // Items the AI evaluated but didn't confirm as strong-enough evidence,
+    // plus anything past the AI input cap that was never evaluated at all,
+    // still get an honest, deterministic second look: real search signal
+    // must not just vanish because the AI's stricter competitor-relationship
+    // bar wasn't met. Only items that ALSO show a real keyword signal are
+    // rescued -- a plain brand mention with nothing else stays excluded.
+    const aiRejectedUrls = new Set(aiResult.filter((r) => !r.validCandidate).map((r) => r.sourceUrl));
+    const rejectedItems = classifyInput.filter((item) => aiRejectedUrls.has(item.url));
+    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow]);
+    funnel.rescuedScored = rescued.length;
+    funnel.rejectedWeakEvidence = aiRejectedUrls.size + overflow.length - rescued.length;
+
+    classified = [...aiResult, ...rescued];
+    log.mark("classification_end", {
+      domain: competitor.domain,
+      aiClassified: aiResult.length,
+      validFromAI: aiResult.filter((r) => r.validCandidate).length,
+      rescued: rescued.length,
+    });
   } catch (err) {
     // AI classification failing or timing out must never throw away a real,
     // already-discovered evidence pool -- degrade to deterministic,
     // clearly-unverified scoring over the full pool instead of rejecting.
     log.fail("classification", err, { domain: competitor.domain, provider: "anthropic" });
     classified = scoreUnverified(pool);
+    funnel.timedOutFallbackScored = classified.length;
     log.mark("classification_end", { domain: competitor.domain, classified: classified.length, verified: false });
   }
 
-  return { classified, itemsSearched: combined.length };
+  return { classified, itemsSearched: combined.length, funnel };
 }
 
 export async function POST(request: NextRequest) {
@@ -388,10 +429,10 @@ export async function POST(request: NextRequest) {
     // needing to decide in advance which to bother running.
     const [perCompetitorOutcomes, categoryOutcome] = await Promise.all([
       Promise.allSettled(competitors.map((c) => discoverForCompetitor(c, controller.signal, log))),
-      (async (): Promise<{ classified: ClassifiedResult[]; itemsSearched: number }> => {
+      (async (): Promise<{ classified: ClassifiedResult[]; itemsSearched: number; funnel: StrategyFunnel }> => {
         const { pool: categoryPool, itemsSearched } = await categoryPoolPromise;
         if (!profile.category || categoryPool.length === 0) {
-          return { classified: [], itemsSearched };
+          return { classified: [], itemsSearched, funnel: emptyFunnel() };
         }
         // Competitor domains weren't known when the pool was fetched --
         // filter them out now, so a resolved competitor's own site never
@@ -404,34 +445,45 @@ export async function POST(request: NextRequest) {
             return false;
           }
         });
+        const priorFunnel = { totalCandidates: categoryPool.length, deduplicated: categoryPool.length - filteredPool.length };
         if (filteredPool.length === 0) {
-          return { classified: [], itemsSearched };
+          return { classified: [], itemsSearched, funnel: { ...priorFunnel, sentToAI: 0, aiClassified: 0, timedOutFallbackScored: 0, rescuedScored: 0, rejectedWeakEvidence: 0 } };
         }
-        const { classified } = await classifyCategoryPool(
+        const { classified, funnel } = await classifyCategoryPool(
           filteredPool,
           profile.category,
           controller.signal,
           CLASSIFY_TIMEOUT_MS,
-          log
+          log,
+          priorFunnel
         );
-        return { classified, itemsSearched };
+        return { classified, itemsSearched, funnel };
       })(),
     ]);
 
     const strategyAClassified: ClassifiedResult[] = [];
     let strategyAQueriesRun = 0;
     let anyCompetitorSucceeded = false;
+    const strategyAFunnel = emptyFunnel();
     for (const outcome of perCompetitorOutcomes) {
       if (outcome.status === "fulfilled") {
         anyCompetitorSucceeded = true;
         strategyAClassified.push(...outcome.value.classified);
         strategyAQueriesRun += outcome.value.itemsSearched;
+        strategyAFunnel.totalCandidates += outcome.value.funnel.totalCandidates;
+        strategyAFunnel.deduplicated += outcome.value.funnel.deduplicated;
+        strategyAFunnel.sentToAI += outcome.value.funnel.sentToAI;
+        strategyAFunnel.aiClassified += outcome.value.funnel.aiClassified;
+        strategyAFunnel.timedOutFallbackScored += outcome.value.funnel.timedOutFallbackScored;
+        strategyAFunnel.rescuedScored += outcome.value.funnel.rescuedScored;
+        strategyAFunnel.rejectedWeakEvidence += outcome.value.funnel.rejectedWeakEvidence;
       }
     }
     const strategyAInfraFailed = competitors.length > 0 && !anyCompetitorSucceeded;
 
     const strategyBClassified = categoryOutcome.classified;
     const strategyBQueriesRun = categoryOutcome.itemsSearched;
+    const strategyBFunnel = categoryOutcome.funnel;
 
     const allClassified = [...strategyAClassified, ...strategyBClassified];
     const queriesRun = strategyAQueriesRun + strategyBQueriesRun;
@@ -461,6 +513,33 @@ export async function POST(request: NextRequest) {
     }
 
     const deduped = dedupeCandidates(allClassified);
+
+    // Full discovery -> classification funnel, logged once per scan so a
+    // real run can be audited stage by stage without guessing where
+    // candidates disappeared. "removedByConfidence" replicates dedupe.ts's
+    // own gate rather than exposing it as a side channel from that
+    // function -- verified:false candidates are never actually gated by
+    // confidence (see minConfidenceFor), so this is expected to be 0 for
+    // them and only ever count real AI-verified rejections.
+    const verifiedTrueCount = allClassified.filter((c) => c.validCandidate && c.verified).length;
+    const verifiedFalseCount = allClassified.filter((c) => c.validCandidate && !c.verified).length;
+    const removedByConfidence = allClassified.filter(
+      (c) => c.validCandidate && c.confidence < minConfidenceFor(c.signalStrength, c.verified)
+    ).length;
+    log.mark("funnel_summary", {
+      totalCandidates: strategyAFunnel.totalCandidates + strategyBFunnel.totalCandidates,
+      removedForDomainOrDuplicate: strategyAFunnel.deduplicated + strategyBFunnel.deduplicated,
+      sentToAI: strategyAFunnel.sentToAI + strategyBFunnel.sentToAI,
+      aiClassified: strategyAFunnel.aiClassified + strategyBFunnel.aiClassified,
+      timedOutUsedFullPoolFallback: strategyAFunnel.timedOutFallbackScored + strategyBFunnel.timedOutFallbackScored,
+      rescuedFromAiRejectionOrOverflow: strategyAFunnel.rescuedScored + strategyBFunnel.rescuedScored,
+      verifiedTrueCount,
+      verifiedFalseCount,
+      rejectedWeakEvidenceNotRescued: strategyAFunnel.rejectedWeakEvidence + strategyBFunnel.rejectedWeakEvidence,
+      removedByMinimumConfidence: removedByConfidence,
+      finalReturned: Math.min(deduped.length, MAX_RESULTS_RETURNED),
+      totalFoundBeforeSlice: deduped.length,
+    });
 
     if (deduped.length === 0) {
       log.mark("response_sent", { outcome: "no_candidates_found" });
