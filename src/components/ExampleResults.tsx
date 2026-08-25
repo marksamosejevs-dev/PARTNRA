@@ -23,6 +23,8 @@ const EXAMPLE_CANDIDATES: Candidate[] = [
     confidence: 94,
     fitScore: 91,
     applicationUrl: null,
+      similarEvidenceNetwork: false,
+      similarEvidenceDomainCount: 0,
     reason: "Named creator with a personalized discount code, corroborated across two platforms.",
   },
   {
@@ -43,6 +45,8 @@ const EXAMPLE_CANDIDATES: Candidate[] = [
     confidence: 85,
     fitScore: 80,
     applicationUrl: null,
+      similarEvidenceNetwork: false,
+      similarEvidenceDomainCount: 0,
     reason: "Outbound link carries an affiliate tracking parameter.",
   },
   {
@@ -63,6 +67,8 @@ const EXAMPLE_CANDIDATES: Candidate[] = [
     confidence: 79,
     fitScore: 84,
     applicationUrl: null,
+      similarEvidenceNetwork: false,
+      similarEvidenceDomainCount: 0,
     reason: "Disclosed partnership plus a dedicated discount page.",
   },
 ];

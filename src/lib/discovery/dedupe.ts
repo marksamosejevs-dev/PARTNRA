@@ -1,5 +1,6 @@
 import { Candidate, ClassifiedResult, SignalStrength } from "./types";
 import { computeFitScore } from "./entity";
+import { flagDuplicateEvidenceNetworks } from "./duplicateNetwork";
 
 const STRENGTH_RANK: Record<SignalStrength, number> = { strong: 2, medium: 1, potential: 0 };
 
@@ -86,6 +87,10 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       confidence: item.confidence,
       fitScore: item.fitScore, // recomputed below once sourceCount/applicationUrl are final
       applicationUrl: item.applicationUrl,
+      // Real values only assigned once the full pool is assembled, below --
+      // see flagDuplicateEvidenceNetworks.
+      similarEvidenceNetwork: false,
+      similarEvidenceDomainCount: 0,
       reason: item.reason,
     };
 
@@ -139,7 +144,13 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
     }),
   }));
 
-  return withFinalFit.sort(
+  // Cross-domain templated/doorway-network detection needs the full
+  // deduplicated (one row per real entity) list to compare against -- runs
+  // last, right before the ranking sort, so a down-ranked cluster member's
+  // discounted fitScore is what the sort actually orders by.
+  const withNetworkFlags = flagDuplicateEvidenceNetworks(withFinalFit);
+
+  return withNetworkFlags.sort(
     (a, b) =>
       STRENGTH_RANK[b.signalStrength] - STRENGTH_RANK[a.signalStrength] ||
       Number(b.verified) - Number(a.verified) ||

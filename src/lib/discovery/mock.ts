@@ -26,6 +26,8 @@ export function getMockCandidates(brand: string): Candidate[] {
       confidence: 92,
       fitScore: 90,
       applicationUrl: null,
+      similarEvidenceNetwork: false,
+      similarEvidenceDomainCount: 0,
       reason: "Named creator with a personalized discount code tied to the brand, corroborated across two platforms.",
     },
     {
@@ -46,6 +48,8 @@ export function getMockCandidates(brand: string): Candidate[] {
       confidence: 81,
       fitScore: 78,
       applicationUrl: null,
+      similarEvidenceNetwork: false,
+      similarEvidenceDomainCount: 0,
       reason: "Outbound link carries an affiliate tracking parameter.",
     },
     {
@@ -66,6 +70,8 @@ export function getMockCandidates(brand: string): Candidate[] {
       confidence: 76,
       fitScore: 82,
       applicationUrl: null,
+      similarEvidenceNetwork: false,
+      similarEvidenceDomainCount: 0,
       reason: "Disclosed partnership plus a dedicated discount page.",
     },
   ];

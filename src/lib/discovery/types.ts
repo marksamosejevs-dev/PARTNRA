@@ -88,6 +88,19 @@ export interface Candidate {
   fitScore: number;
   /** A real affiliate/partner-program signup page found in the evidence itself, if any -- often more actionable than a generic contact email. Never fabricated; null when no such page was found. */
   applicationUrl: string | null;
+  /**
+   * True when this candidate's domain/evidence closely matches one or more
+   * OTHER candidates on genuinely different domains -- a templated/doorway
+   * SEO network (e.g. sequential numeric-suffix domains, or near-identical
+   * evidence text) rather than independently vetted partners. Distinct
+   * domains are never merged into one candidate over this (see dedupe.ts) --
+   * each stays its own row, just flagged and down-ranked, since template
+   * reuse doesn't prove any one of them is fake, only that none of them
+   * should occupy a top slot on the strength of that evidence alone.
+   */
+  similarEvidenceNetwork: boolean;
+  /** Total number of distinct domains (including this one) in the templated/near-duplicate cluster this candidate was grouped into by flagDuplicateEvidenceNetworks. 0 when not part of one. */
+  similarEvidenceDomainCount: number;
   reason: string;
 }
 

@@ -88,6 +88,11 @@ function buildCandidateFields(source: SourceItem | undefined, signalStrength: "s
     // Placeholder using sourceCount:1 -- dedupe.ts recomputes this after
     // merging duplicate sightings, when the real sourceCount is known.
     fitScore: computeFitScore({ signalStrength, verified, type: entity.type, sourceCount: 1, hasApplicationRoute: !!entity.applicationUrl }),
+    // Cross-candidate templated/doorway-network detection can only run once
+    // the full pool is assembled -- see dedupe.ts's flagDuplicateEvidenceNetworks,
+    // which overwrites these once the real comparison is possible.
+    similarEvidenceNetwork: false,
+    similarEvidenceDomainCount: 0,
   };
 }
 

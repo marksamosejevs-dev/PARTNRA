@@ -89,6 +89,13 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
             {EVIDENCE_CONFIDENCE_LABEL[candidate.evidenceConfidence]}
           </span>
         </div>
+        {candidate.similarEvidenceNetwork && (
+          <div className="inline-flex items-center gap-2 rounded-full border border-dashed border-ink/20 px-3 py-1">
+            <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/45">
+              Similar evidence across {candidate.similarEvidenceDomainCount} domains
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="mt-4">
