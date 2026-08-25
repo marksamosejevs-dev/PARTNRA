@@ -82,6 +82,22 @@ export function AlexDashboard() {
                 ))}
               </div>
             </div>
+
+            <div className="mt-8 border-t border-white/10 pt-6">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-mono-label text-xs font-semibold uppercase tracking-[0.18em] text-paper/40">
+                  New this week
+                </span>
+                <span className="font-mono-label rounded-full bg-white/[0.06] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-paper/40">
+                  Coming soon
+                </span>
+              </div>
+              <p className="mt-3 text-[14px] leading-relaxed text-paper/45 md:text-[15px]">
+                Once recurring scans are live, PARTNRA will surface new partner
+                opportunities, competitor relationships and contacts found since your
+                last scan here — never reshuffled old results relabelled as new.
+              </p>
+            </div>
           </Reveal>
 
           <Reveal delay={0.1} className="rounded-3xl border border-lime/25 bg-lime/[0.05] p-6 md:p-9">

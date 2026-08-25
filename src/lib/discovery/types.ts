@@ -59,6 +59,10 @@ export interface DiscoverResponse {
   queriesRun: number;
   totalFound: number;
   candidates: Candidate[];
+  /** Product category Partnra identified for the submitted business, if determinable. */
+  businessCategory: string | null;
+  /** Real, resolved comparable-brand domains Partnra investigated on the user's behalf. */
+  competitorsAnalyzed: string[];
 }
 
 export interface DiscoverErrorResponse {
