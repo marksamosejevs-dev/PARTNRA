@@ -1,4 +1,4 @@
-import { CandidateType, SignalStrength, SourceItem } from "./types";
+import { CandidateType, NON_PARTNER_TYPES, SignalStrength, SourceItem } from "./types";
 
 /**
  * A search result is evidence; the entity it's evidence FOR is the site,
@@ -54,29 +54,144 @@ function rootUrlFromUrl(url: string): string | null {
   }
 }
 
+/**
+ * Ordered so a more specific/higher-signal rule wins when text matches
+ * more than one (e.g. "affiliate program for our distributors" should read
+ * as Affiliate before Distributor). Content-based only -- deliberately
+ * NEVER keyed on `item.source`/`item.platform`: which platform surfaced
+ * this evidence says nothing about what the entity behind it commercially
+ * is. A law firm's own YouTube video is still evidence of a law firm.
+ */
 const TYPE_KEYWORD_RULES: Array<{ type: CandidateType; test: RegExp }> = [
+  { type: "Professional services firm", test: /\b(law firm|legal services|attorneys?|advocates?|law offices?|solicitors?|llp)\b|\b(tax advis(?:er|or)s?|chartered accountants?|audit firm|accounting firm|compliance consultanc(?:y|ies)|corporate services? provider)\b/i },
+  { type: "Affiliate Network", test: /affiliate network|performance marketing network|cpa network/i },
   { type: "Affiliate", test: /affiliate program|become an affiliate|partner program|advertiser sign[- ]?up|join our affiliate/i },
   { type: "Coupon publisher", test: /promo code|discount code|coupon|% off|deal(s)?\b/i },
-  { type: "Newsletter", test: /newsletter|subscribe to our/i },
-  { type: "Review site", test: /\breview(s)?\b|comparison|\bvs\.?\b|best .* (for|of)/i },
-  { type: "Retailer", test: /\bshop\b|\bstore\b|buy now|add to cart/i },
-  { type: "Distributor", test: /distributor|wholesale/i },
+  { type: "Wholesaler", test: /wholesale(r)?/i },
+  { type: "Importer", test: /\bimporter\b|import(?:s|ed)? (?:from|of)\b/i },
+  { type: "Distributor", test: /distributor/i },
+  { type: "Trader", test: /\btrader\b|commodity trading/i },
+  { type: "Reseller", test: /\breseller\b/i },
+  { type: "Commercial buyer", test: /\b(procurement|sourcing|bulk buyer|purchasing department|request a quote|rfq)\b/i },
+  { type: "Referral partner", test: /\breferral partner\b|refer (?:a )?client|client referral/i },
   { type: "Marketplace", test: /marketplace/i },
-  { type: "Community", test: /\bforum\b|community|subreddit/i },
 ];
 
 /**
- * Coarse, keyword/source-based partner-type classification -- never claims
- * a type it can't support from the actual title/snippet/source; falls back
- * to "Publisher" (a generic real-site bucket) or "Creator" (YouTube) rather
- * than a more specific claim it hasn't earned.
+ * Softer, more ambiguous signals -- "review", "shop"/"store", "newsletter",
+ * "community" -- that a single creator's own video/post can trigger
+ * incidentally ("my honest review", "link in my shop") without that making
+ * the CREATOR a "Review site"/"Retailer"/etc business. Checked only AFTER
+ * the Creator-native-platform check below, so an individual's own channel
+ * on YouTube/Instagram/TikTok is read as a Creator first; a real
+ * review-website/newsletter/retailer/community found on the open web (or
+ * whose name reads as a company) still gets these types normally, since
+ * the Creator check only fires for creator-native platforms in the first
+ * place.
+ */
+const AMBIGUOUS_KEYWORD_RULES: Array<{ type: CandidateType; test: RegExp }> = [
+  { type: "Review site", test: /\breview(s)?\b|comparison|\bvs\.?\b|best .{0,40}\b(for|of)\b/i },
+  { type: "Newsletter", test: /newsletter|subscribe to our/i },
+  { type: "Retailer", test: /\bshop\b|\bstore\b|buy now|add to cart/i },
+  { type: "Community", test: /\bforum\b|community|subreddit/i },
+];
+
+/** A platform, not a commercial entity in itself -- resolving an entity name from the host alone (e.g. "Linkedin") would fabricate a fake "partner". Only usable as evidence when the provider supplied a real entityName for whoever posted there. */
+const NON_ENTITY_PLATFORM_HOSTS = new Set([
+  "linkedin.com",
+  "twitter.com",
+  "x.com",
+  "reddit.com",
+  "medium.com",
+  "wikipedia.org",
+  "en.wikipedia.org",
+  "facebook.com",
+  "pinterest.com",
+  "quora.com",
+]);
+
+function isNonEntityPlatformHost(hostname: string): boolean {
+  const host = hostname.replace(/^www\./i, "").toLowerCase();
+  return Array.from(NON_ENTITY_PLATFORM_HOSTS).some((h) => host === h || host.endsWith(`.${h}`));
+}
+
+/** A PDF/document URL is evidence, not a commercial entity to resolve a partner from. */
+function isDocumentUrl(url: string): boolean {
+  try {
+    return /\.(pdf|docx?|xlsx?|pptx?)$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Company-ish name signals (legal-entity suffixes, professional-services
+ * words, obviously corporate/geographic branding) used to tell an
+ * individual creator's channel apart from a company's own channel on the
+ * same creator-native platform -- content-based, not platform-based.
+ */
+const COMPANY_NAME_PATTERN =
+  /\b(law|legal|attorneys?|advocates?|llp|llc|gmbh|ltd\.?|inc\.?|corp\.?|co\.?|partners|group|associates|solutions|technologies|systems|international|worldwide|holdings)\b/i;
+
+/**
+ * Platforms whose native content is typically an individual's own channel
+ * (a person publishing under their own identity) rather than a company's
+ * official presence -- used only as one input alongside the resolved
+ * entity name's shape, never on its own, to decide Creator vs. a company
+ * that merely also has a channel there.
+ */
+const CREATOR_NATIVE_SOURCES = new Set(["YouTube", "Instagram", "TikTok"]);
+
+/**
+ * Resolves the entity's commercial role from real content/structure --
+ * never from which source platform surfaced it (see the module doc and
+ * types.ts's CandidateType comment: `source`/`platform` is WHERE, `type`
+ * is WHAT). A law firm's YouTube video is still a law firm; an
+ * independent reviewer's YouTube video is still a Creator -- the
+ * difference is read from the entity's own name/content, not the
+ * platform. Never claims a type it can't support from the actual
+ * evidence; falls back to "Evidence source" for a platform post/document
+ * with no resolvable entity identity, or "Publisher" (a generic real-site
+ * bucket) otherwise.
  */
 export function classifyPartnerType(item: SourceItem): CandidateType {
-  if (item.source === "YouTube") return "Creator";
+  let hostname: string | null = null;
+  try {
+    hostname = new URL(item.url).hostname;
+  } catch {
+    hostname = null;
+  }
+
+  if (isDocumentUrl(item.url)) return "Evidence source";
+  if (hostname && isNonEntityPlatformHost(hostname) && !item.entityName) return "Evidence source";
+
   const text = `${item.title} ${item.snippet}`;
+
+  // Strong, specific commercial-role signals win regardless of platform --
+  // checked FIRST so e.g. a law firm's own YouTube video is never
+  // miscategorized just because it's on a creator-native platform.
   for (const rule of TYPE_KEYWORD_RULES) {
     if (rule.test.test(text)) return rule.type;
   }
+
+  // On a creator-native platform, an individual's own channel (name doesn't
+  // read as a company) is a Creator -- checked BEFORE the softer, more
+  // ambiguous rules below, since "review"/"shop"/"newsletter"-type words
+  // show up incidentally in a huge share of ordinary creator content
+  // without that making the creator a distinct review-site/retailer/
+  // newsletter business.
+  if (
+    CREATOR_NATIVE_SOURCES.has(item.source) &&
+    item.entityName &&
+    !COMPANY_NAME_PATTERN.test(item.entityName)
+  ) {
+    return "Creator";
+  }
+
+  for (const rule of AMBIGUOUS_KEYWORD_RULES) {
+    if (rule.test.test(text)) return rule.type;
+  }
+
   return "Publisher";
 }
 
@@ -161,21 +276,52 @@ export interface ResolvedEntity {
   applicationUrl: string | null;
 }
 
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resolves the entity behind a source item: prefers a provider-supplied
  * authoritative name (e.g. a YouTube channel title) over a domain-derived
- * guess, and never falls back to the raw page title -- if neither a real
- * name nor a usable domain is available, name is null rather than guessed.
+ * guess, and never falls back to the raw page title. Deriving a name from
+ * the domain is only valid when the domain IS the entity (a real business's
+ * own site) -- for a platform host (linkedin.com, a PDF/document, etc.)
+ * with no provider-supplied entityName, deriving "Linkedin" as the "entity"
+ * would fabricate a fake partner out of the platform itself, so name and
+ * profileUrl stay null and applicationUrl is never set from platform-hosted
+ * evidence either -- an "Apply" button should never point at someone's
+ * LinkedIn post.
  */
 export function resolveEntity(item: SourceItem): ResolvedEntity {
-  const name = item.entityName ?? deriveEntityNameFromUrl(item.url);
-  const profileUrl = item.profileUrl ?? rootUrlFromUrl(item.url);
+  const hostname = hostnameOf(item.url);
+  const isNonEntityEvidence =
+    isDocumentUrl(item.url) || (!!hostname && isNonEntityPlatformHost(hostname) && !item.entityName);
+
+  const name = item.entityName ?? (isNonEntityEvidence ? null : deriveEntityNameFromUrl(item.url));
+  const profileUrl = item.profileUrl ?? (isNonEntityEvidence ? null : rootUrlFromUrl(item.url));
   const type = classifyPartnerType(item);
-  const applicationUrl = findApplicationUrl(item);
+  const applicationUrl = isNonEntityEvidence ? null : findApplicationUrl(item);
   return { name, profileUrl, type, applicationUrl };
 }
 
-const HIGH_VALUE_TYPES = new Set<CandidateType>(["Affiliate", "Creator", "Review site", "Distributor", "Reseller"]);
+const HIGH_VALUE_TYPES = new Set<CandidateType>([
+  "Affiliate",
+  "Affiliate Network",
+  "Creator",
+  "Review site",
+  "Distributor",
+  "Wholesaler",
+  "Importer",
+  "Reseller",
+  "Trader",
+  "Commercial buyer",
+  "Referral partner",
+  "Professional services firm",
+]);
 const LOW_VALUE_TYPES = new Set<CandidateType>(["Coupon publisher"]);
 
 /**
@@ -185,6 +331,13 @@ const LOW_VALUE_TYPES = new Set<CandidateType>(["Coupon publisher"]);
  * entity is as a partner prospect *given* that evidence, so a Coupon
  * publisher and an Affiliate-infrastructure site with otherwise-identical
  * evidence strength do not rank the same.
+ *
+ * `prioritizedTypes`/`deprioritizedTypes` are this specific business's
+ * Partner Intent Profile (see business.ts) -- generated dynamically per
+ * scan, never hardcoded per industry. The same "Creator" type is worth
+ * more for a DTC supplement brand than for an industrial B2B wholesaler;
+ * this is where that difference actually changes the ranking, without any
+ * per-domain branching in code.
  */
 export function computeFitScore(input: {
   signalStrength: SignalStrength;
@@ -192,14 +345,28 @@ export function computeFitScore(input: {
   type: CandidateType | null;
   sourceCount: number;
   hasApplicationRoute: boolean;
+  prioritizedTypes?: ReadonlySet<CandidateType>;
+  deprioritizedTypes?: ReadonlySet<CandidateType>;
 }): number {
   const strengthBase: Record<SignalStrength, number> = { strong: 60, medium: 45, potential: 28 };
   let score = strengthBase[input.signalStrength];
   if (input.type && HIGH_VALUE_TYPES.has(input.type)) score += 15;
   else if (input.type && LOW_VALUE_TYPES.has(input.type)) score -= 10;
+  if (input.type && input.prioritizedTypes?.has(input.type)) score += 12;
+  if (input.type && input.deprioritizedTypes?.has(input.type)) score -= 12;
   score += input.verified ? 5 : 0;
   score += Math.min((input.sourceCount - 1) * 5, 15);
   score += input.hasApplicationRoute ? 10 : 0;
+
+  // Competitor-owned infrastructure, a directly comparable business, or a
+  // non-entity evidence source (see NON_PARTNER_TYPES) is never a normal
+  // "Potential Partner" opportunity, however strong its raw evidence looks
+  // -- this is a defense-in-depth cap, not the primary mechanism (route.ts
+  // excludes these from the Potential Partners list outright unless a real
+  // potentialRelationship applies; this just keeps the number honest if one
+  // ever surfaces elsewhere, e.g. in logs).
+  if (input.type && NON_PARTNER_TYPES.has(input.type)) score = Math.min(score, 20);
+
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
@@ -207,4 +374,71 @@ export function computeFitScore(input: {
 export function evidenceConfidenceLabel(signalStrength: SignalStrength, verified: boolean): "strong" | "medium" | "weak" {
   if (!verified) return "weak";
   return signalStrength === "strong" ? "strong" : "medium";
+}
+
+export function isSameRegistrableDomain(hostname: string, rootDomain: string): boolean {
+  const h = hostname.replace(/^www\./i, "").toLowerCase();
+  const r = rootDomain.replace(/^www\./i, "").toLowerCase();
+  return h === r || h.endsWith(`.${r}`);
+}
+
+function normalizedBrandToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Detects a competitor's OWN affiliate/partner infrastructure -- distinct
+ * from an independent third party that merely promotes the competitor.
+ * "Bet365 Partners" tells you bet365 operates an affiliate program (real,
+ * valuable competitor intelligence); it is not itself a recruitable
+ * partner for a different business, since the user can't sign THEIR
+ * business up for a competitor's own program.
+ *
+ * Two signals, either sufficient on its own:
+ * 1. The resolved entity's domain is the competitor's own domain or a
+ *    subdomain of it (e.g. partners.bet365.com) -- proves ownership
+ *    regardless of page content.
+ * 2. The resolved entity's name starts with the competitor's own brand
+ *    name AND the page reads as an official application/signup page (see
+ *    findApplicationUrl) -- covers a competitor's program hosted on a
+ *    separately branded domain (e.g. "bet365partners.com"), which domain
+ *    matching alone can't catch.
+ *
+ * Generic and parameterized by whichever competitor this scan actually
+ * resolved -- never a hardcoded brand/domain. Reclassifies the item's
+ * `type` to "Competitor affiliate program" (see NON_PARTNER_TYPES) rather
+ * than removing it outright, so it's still visible as competitor
+ * intelligence, just never as an independent, recruitable partner; its
+ * applicationUrl is cleared (it's the competitor's own signup, not one the
+ * user could use) and fitScore is capped low.
+ */
+export function flagCompetitorOwnedInfrastructure<
+  T extends {
+    name: string | null;
+    profileUrl: string | null;
+    sourceUrl: string;
+    type: CandidateType | null;
+    applicationUrl: string | null;
+    fitScore: number;
+  },
+>(items: T[], competitor: { name: string; domain: string }): T[] {
+  const competitorToken = normalizedBrandToken(competitor.name);
+
+  return items.map((item) => {
+    const candidateHostname = hostnameOf(item.profileUrl ?? item.sourceUrl);
+    const isOwnDomain = !!candidateHostname && isSameRegistrableDomain(candidateHostname, competitor.domain);
+
+    const entityToken = item.name ? normalizedBrandToken(item.name) : "";
+    const isBrandedInfra =
+      !isOwnDomain && competitorToken.length > 2 && entityToken.startsWith(competitorToken) && !!item.applicationUrl;
+
+    if (!isOwnDomain && !isBrandedInfra) return item;
+
+    return {
+      ...item,
+      type: "Competitor affiliate program" as CandidateType,
+      applicationUrl: null,
+      fitScore: Math.min(item.fitScore, 20),
+    };
+  });
 }

@@ -13,7 +13,10 @@ import {
   isClassifierConfigured,
   ClassifierError,
   MAX_CLASSIFY_INPUT,
+  BusinessContext,
+  PartnerTypeIntent,
 } from "@/lib/discovery/classify";
+import { flagCompetitorOwnedInfrastructure, isSameRegistrableDomain } from "@/lib/discovery/entity";
 import { dedupeCandidates, minConfidenceFor } from "@/lib/discovery/dedupe";
 import { enrichContact, isHunterConfigured } from "@/lib/discovery/hunter";
 import { getMockCandidates } from "@/lib/discovery/mock";
@@ -23,12 +26,30 @@ import {
   identifyBusiness,
   isBusinessAnalysisConfigured,
   BusinessAnalysisError,
+  BusinessProfile,
 } from "@/lib/discovery/business";
 import { resolveCompetitorDomain, ResolvedCompetitor } from "@/lib/discovery/competitors";
 import { fetchCategoryPool, classifyCategoryPool, StrategyFunnel } from "@/lib/discovery/categoryDiscovery";
 import { raceWithTimeout, withFallback, raceValueWithTimeout, StageTimeoutError } from "@/lib/discovery/timeout";
 import { createScanLogger } from "@/lib/discovery/scanLogger";
-import { DiscoverResponse, SourceItem, ClassifiedResult } from "@/lib/discovery/types";
+import { DiscoverResponse, SourceItem, ClassifiedResult, NON_PARTNER_TYPES } from "@/lib/discovery/types";
+
+function buildBusinessContext(profile: BusinessProfile): BusinessContext {
+  return {
+    category: profile.category,
+    businessModel: profile.businessModel,
+    targetCustomers: profile.targetCustomers,
+    market: profile.market,
+    commercialIntentConcepts: profile.commercialIntentConcepts,
+  };
+}
+
+function buildPartnerTypeIntent(profile: BusinessProfile): PartnerTypeIntent {
+  return {
+    prioritized: new Set(profile.prioritizedPartnerTypes),
+    deprioritized: new Set(profile.deprioritizedPartnerTypes),
+  };
+}
 
 // NOTE on Instagram/TikTok (Apify): deliberately NOT wired into this route.
 // Apify's synchronous run-sync-get-dataset-items endpoint is the confirmed
@@ -151,6 +172,8 @@ function emptyResponse(
  */
 async function discoverForCompetitor(
   competitor: ResolvedCompetitor,
+  businessContext: BusinessContext,
+  intent: PartnerTypeIntent,
   parentSignal: AbortSignal,
   log: ReturnType<typeof createScanLogger>
 ): Promise<{ classified: ClassifiedResult[]; itemsSearched: number; funnel: StrategyFunnel }> {
@@ -158,9 +181,10 @@ async function discoverForCompetitor(
   log.mark("openai_discovery_start", { domain: competitor.domain });
   log.mark("youtube_discovery_start", { domain: competitor.domain });
 
+  const concepts = businessContext.commercialIntentConcepts;
   const [webOutcome, openai, youtube] = await Promise.all([
     raceWithTimeout(
-      (signal) => discoverFromWeb(competitor.name, competitor.domain, signal),
+      (signal) => discoverFromWeb(competitor.name, competitor.domain, signal, concepts),
       SOURCE_TIMEOUT_MS,
       `web search (${competitor.domain})`,
       parentSignal
@@ -171,13 +195,13 @@ async function discoverForCompetitor(
         return { ok: false as const, error: err };
       }),
     withFallback(
-      (signal) => discoverFromOpenAI(competitor.name, signal),
+      (signal) => discoverFromOpenAI(competitor.name, signal, concepts),
       SOURCE_TIMEOUT_MS,
       `OpenAI web search (${competitor.domain})`,
       []
     ),
     withFallback(
-      (signal) => discoverFromYoutube(competitor.name, signal),
+      (signal) => discoverFromYoutube(competitor.name, signal, concepts),
       SOURCE_TIMEOUT_MS,
       `YouTube search (${competitor.domain})`,
       []
@@ -214,7 +238,11 @@ async function discoverForCompetitor(
     } catch {
       continue;
     }
-    if (itemHost === competitor.domain) continue; // the competitor's own site, not a partner
+    // The competitor's own domain OR a subdomain of it (e.g.
+    // partners.bet365.com) is their own site/infrastructure, not a third
+    // party -- a bare `=== competitor.domain` check let a subdomain slip
+    // through into the pool as if it were an independent result.
+    if (isSameRegistrableDomain(itemHost, competitor.domain)) continue;
     if (seenUrls.has(item.url)) continue;
     seenUrls.add(item.url);
     pool.push(item);
@@ -237,11 +265,15 @@ async function discoverForCompetitor(
   const overflow = pool.filter((i) => !classifyInputUrls.has(i.url));
   funnel.sentToAI = classifyInput.length;
 
+  const categoryPhrases = [businessContext.category, ...businessContext.commercialIntentConcepts].filter(
+    (p): p is string => !!p
+  );
+
   log.mark("classification_start", { domain: competitor.domain, poolSize: pool.length, sentToAI: classifyInput.length });
   let classified: ClassifiedResult[];
   try {
     const aiResult = await raceWithTimeout(
-      (signal) => classifyResults(classifyInput, competitor.name, competitor.domain, signal),
+      (signal) => classifyResults(classifyInput, competitor.name, competitor.domain, businessContext, signal, intent),
       CLASSIFY_TIMEOUT_MS,
       `AI classification (${competitor.domain})`,
       parentSignal
@@ -256,7 +288,7 @@ async function discoverForCompetitor(
     // rescued -- a plain brand mention with nothing else stays excluded.
     const aiRejectedUrls = new Set(aiResult.filter((r) => !r.validCandidate).map((r) => r.sourceUrl));
     const rejectedItems = classifyInput.filter((item) => aiRejectedUrls.has(item.url));
-    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow]);
+    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow], categoryPhrases, intent);
     funnel.rescuedScored = rescued.length;
     funnel.rejectedWeakEvidence = aiRejectedUrls.size + overflow.length - rescued.length;
 
@@ -272,10 +304,17 @@ async function discoverForCompetitor(
     // already-discovered evidence pool -- degrade to deterministic,
     // clearly-unverified scoring over the full pool instead of rejecting.
     log.fail("classification", err, { domain: competitor.domain, provider: "anthropic" });
-    classified = scoreUnverified(pool);
+    classified = scoreUnverified(pool, categoryPhrases, intent);
     funnel.timedOutFallbackScored = classified.length;
     log.mark("classification_end", { domain: competitor.domain, classified: classified.length, verified: false });
   }
+
+  // A hit whose resolved entity is the competitor's OWN affiliate/partner
+  // infrastructure (own domain/subdomain, or a separately-branded but
+  // clearly competitor-owned program page) is valuable competitor
+  // intelligence, but never an independent, recruitable partner -- see
+  // entity.ts's flagCompetitorOwnedInfrastructure.
+  classified = flagCompetitorOwnedInfrastructure(classified, competitor);
 
   return { classified, itemsSearched: combined.length, funnel };
 }
@@ -390,6 +429,23 @@ export async function POST(request: NextRequest) {
       suggestedCompetitors: profile.competitorNames.length,
     });
 
+    // The Partner Intent Profile -- how THIS business actually grows,
+    // generated dynamically above, never hardcoded per industry/domain.
+    // Logged in full since this sandbox has no other way to inspect it on
+    // a real deployed run; it's what drives query generation, role-fit
+    // scoring, and (deprioritized types) ranking below.
+    const businessContext = buildBusinessContext(profile);
+    const intent = buildPartnerTypeIntent(profile);
+    log.mark("partner_intent_profile", {
+      businessModel: profile.businessModel,
+      targetCustomers: profile.targetCustomers,
+      salesModel: profile.salesModel,
+      market: profile.market,
+      prioritizedPartnerTypes: profile.prioritizedPartnerTypes,
+      deprioritizedPartnerTypes: profile.deprioritizedPartnerTypes,
+      commercialIntentConcepts: profile.commercialIntentConcepts,
+    });
+
     // Category/product-signal search is kicked off now, concurrently with
     // competitor resolution below -- it doesn't depend on which competitors
     // resolve.
@@ -428,7 +484,7 @@ export async function POST(request: NextRequest) {
     // strong Strategy A result always outranks a Strategy B one without
     // needing to decide in advance which to bother running.
     const [perCompetitorOutcomes, categoryOutcome] = await Promise.all([
-      Promise.allSettled(competitors.map((c) => discoverForCompetitor(c, controller.signal, log))),
+      Promise.allSettled(competitors.map((c) => discoverForCompetitor(c, businessContext, intent, controller.signal, log))),
       (async (): Promise<{ classified: ClassifiedResult[]; itemsSearched: number; funnel: StrategyFunnel }> => {
         const { pool: categoryPool, itemsSearched } = await categoryPoolPromise;
         if (!profile.category || categoryPool.length === 0) {
@@ -452,10 +508,12 @@ export async function POST(request: NextRequest) {
         const { classified, funnel } = await classifyCategoryPool(
           filteredPool,
           profile.category,
+          businessContext,
           controller.signal,
           CLASSIFY_TIMEOUT_MS,
           log,
-          priorFunnel
+          priorFunnel,
+          intent
         );
         return { classified, itemsSearched, funnel };
       })(),
@@ -512,7 +570,22 @@ export async function POST(request: NextRequest) {
       return errorResponse("We couldn't complete the search right now. Please try again in a moment.", 502);
     }
 
-    const deduped = dedupeCandidates(allClassified);
+    const deduped = dedupeCandidates(allClassified, intent);
+
+    // Competitor-owned infrastructure, a directly comparable/competing
+    // business, or a non-entity evidence source (see types.ts's
+    // NON_PARTNER_TYPES) is real, useful intelligence -- it's just never
+    // shown as an independent, recruitable Potential Partner. Kept out of
+    // the response's `candidates` (there's no separate "Competitor
+    // Intelligence" UI section to show them in without redesigning the
+    // site), but still counted here so the funnel log accounts for every
+    // candidate, not just the ones that made the final list. A candidate
+    // WITH a real potentialRelationship (e.g. a foreign professional-
+    // services firm that's also a plausible referral partner) stays in the
+    // partner list despite its primary role, since that secondary
+    // opportunity is exactly what potentialRelationship exists to surface.
+    const potentialPartners = deduped.filter((c) => !(c.type && NON_PARTNER_TYPES.has(c.type)) || c.potentialRelationship);
+    const excludedAsIntelligence = deduped.length - potentialPartners.length;
 
     // Full discovery -> classification funnel, logged once per scan so a
     // real run can be audited stage by stage without guessing where
@@ -526,6 +599,7 @@ export async function POST(request: NextRequest) {
     const removedByConfidence = allClassified.filter(
       (c) => c.validCandidate && c.confidence < minConfidenceFor(c.signalStrength, c.verified)
     ).length;
+    const similarEvidenceNetworkFlagged = deduped.filter((c) => c.similarEvidenceNetwork).length;
     log.mark("funnel_summary", {
       totalCandidates: strategyAFunnel.totalCandidates + strategyBFunnel.totalCandidates,
       removedForDomainOrDuplicate: strategyAFunnel.deduplicated + strategyBFunnel.deduplicated,
@@ -537,18 +611,21 @@ export async function POST(request: NextRequest) {
       verifiedFalseCount,
       rejectedWeakEvidenceNotRescued: strategyAFunnel.rejectedWeakEvidence + strategyBFunnel.rejectedWeakEvidence,
       removedByMinimumConfidence: removedByConfidence,
-      finalReturned: Math.min(deduped.length, MAX_RESULTS_RETURNED),
-      totalFoundBeforeSlice: deduped.length,
+      resolvedEntitiesAfterDedupe: deduped.length,
+      excludedAsCompetitorInfrastructureOrEvidenceSource: excludedAsIntelligence,
+      flaggedAsSimilarEvidenceNetwork: similarEvidenceNetworkFlagged,
+      finalReturned: Math.min(potentialPartners.length, MAX_RESULTS_RETURNED),
+      totalPotentialPartnersBeforeSlice: potentialPartners.length,
     });
 
-    if (deduped.length === 0) {
+    if (potentialPartners.length === 0) {
       log.mark("response_sent", { outcome: "no_candidates_found" });
       return NextResponse.json(
         emptyResponse(brand, domain, profile, competitors.map((c) => c.domain), queriesRun, discoveryStrategiesUsed)
       );
     }
 
-    const shortlist = deduped.slice(0, MAX_ENRICHED);
+    const shortlist = potentialPartners.slice(0, MAX_ENRICHED);
 
     // Enrichment runs only on the already-verified shortlist, after dedupe —
     // never spend a Hunter credit on a weak or duplicate candidate. Each
@@ -578,7 +655,7 @@ export async function POST(request: NextRequest) {
       brand,
       domain,
       queriesRun,
-      totalFound: deduped.length,
+      totalFound: potentialPartners.length,
       candidates: enriched.slice(0, MAX_RESULTS_RETURNED),
       businessCategory: profile.category,
       businessMarket: profile.market,
@@ -588,7 +665,7 @@ export async function POST(request: NextRequest) {
     };
     log.mark("response_sent", {
       outcome: "success",
-      totalFound: deduped.length,
+      totalFound: potentialPartners.length,
       strategiesUsed: discoveryStrategiesUsed,
     });
     return NextResponse.json(response);

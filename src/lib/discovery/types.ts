@@ -9,21 +9,65 @@ export type EvidenceType =
   | "Category review"
   | "Distributor fit";
 
-/** The kind of partnership entity this is -- not the kind of evidence found (see EvidenceType). "Other" is an honest fallback for a real entity that doesn't fit these buckets, never guessed into a more specific one it can't support. */
-export type CandidateType =
-  | "Creator"
-  | "Affiliate"
-  | "Publisher"
-  | "Review site"
-  | "Newsletter"
-  | "Coupon publisher"
-  | "Retailer"
-  | "Distributor"
-  | "Reseller"
-  | "Marketplace"
-  | "Community"
-  | "Agency"
-  | "Other";
+/**
+ * The commercial ROLE of the resolved entity behind a piece of evidence --
+ * this is "primaryRole" in all but name. Deliberately independent of which
+ * source platform (see Candidate.platform / SourceItem.platform) the
+ * evidence was found on: a law firm found via a YouTube video is still a
+ * "Professional services firm", not a "Creator", merely because YouTube
+ * happened to be where Partnra found it. "Comparable business" and
+ * "Competitor affiliate program" exist so a competitor's own
+ * infrastructure or a directly comparable/competing business is never
+ * confused with an independent, recruitable partner. "Evidence source"
+ * covers a real, useful piece of intelligence (a PDF, a directory listing,
+ * a platform post) that isn't itself a commercial entity worth showing as
+ * a partner opportunity. "Other" is an honest fallback for a real entity
+ * that doesn't fit these buckets, never guessed into a more specific one
+ * it can't support. Kept as one curated, fixed list -- WHICH of these
+ * types matter for a given business is decided dynamically per-scan (see
+ * BusinessProfile's prioritizedPartnerTypes/deprioritizedPartnerTypes in
+ * business.ts), never by hardcoding logic per industry/domain.
+ */
+export const CANDIDATE_TYPES = [
+  "Creator",
+  "Affiliate",
+  "Affiliate Network",
+  "Publisher",
+  "Review site",
+  "Newsletter",
+  "Coupon publisher",
+  "Retailer",
+  "Distributor",
+  "Wholesaler",
+  "Importer",
+  "Reseller",
+  "Trader",
+  "Marketplace",
+  "Community",
+  "Commercial buyer",
+  "Referral partner",
+  "Professional services firm",
+  "Comparable business",
+  "Competitor affiliate program",
+  "Evidence source",
+  "Other",
+] as const;
+
+export type CandidateType = (typeof CANDIDATE_TYPES)[number];
+
+/**
+ * Types that describe a competitor's own infrastructure, a directly
+ * comparable/competing business, or a non-entity evidence source rather
+ * than an independent, recruitable partner. Excluded from the normal
+ * Potential Partners list (see route.ts) unless a real, evidence-based
+ * potentialRelationship (e.g. a complementary-geography referral angle)
+ * has been set on that specific candidate.
+ */
+export const NON_PARTNER_TYPES = new Set<CandidateType>([
+  "Comparable business",
+  "Competitor affiliate program",
+  "Evidence source",
+]);
 
 export type SourceName = "Web" | "OpenAI" | "YouTube" | "Instagram" | "TikTok";
 
@@ -43,8 +87,20 @@ export type SignalStrength = "strong" | "medium" | "potential";
 
 export interface Candidate {
   name: string | null;
+  /**
+   * The entity's primary commercial role (see CandidateType) -- resolved
+   * from the entity's own content/structure (entity.ts), never from which
+   * source platform found it. `type` and `platform` describe two
+   * different things and must never be conflated: `platform` is WHERE the
+   * evidence was found, `type` is WHAT the entity commercially is.
+   */
   type: CandidateType | null;
-  /** Human-readable platform label(s), e.g. "YouTube" or "YouTube, Instagram" once merged. */
+  /**
+   * Human-readable SOURCE PLATFORM label(s) the evidence was found on
+   * (e.g. "YouTube" or "YouTube, Instagram" once merged) -- never used to
+   * infer `type`. A law firm found via a YouTube video is still a
+   * "Professional services firm", not a "Creator".
+   */
   platform: string | null;
   profileUrl: string | null;
   /** Strongest/first evidence link — what "View evidence" opens. */
@@ -101,6 +157,17 @@ export interface Candidate {
   similarEvidenceNetwork: boolean;
   /** Total number of distinct domains (including this one) in the templated/near-duplicate cluster this candidate was grouped into by flagDuplicateEvidenceNetworks. 0 when not part of one. */
   similarEvidenceDomainCount: number;
+  /**
+   * A real, evidence-based SECONDARY relationship angle that coexists with
+   * `type` -- e.g. a foreign law firm whose primary role is "Comparable
+   * business" but whose complementary geography/service coverage also
+   * makes it a plausible "Potential referral partner". Null by default;
+   * only ever set from an inspectable, real signal (never invented to make
+   * a competitor look more interesting). Role classification is not
+   * binary: this is how a candidate can carry both a primary role and a
+   * secondary opportunity without collapsing them into one label.
+   */
+  potentialRelationship: string | null;
   reason: string;
 }
 

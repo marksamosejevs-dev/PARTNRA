@@ -1,9 +1,45 @@
-import { ClassifiedResult, SourceItem } from "./types";
+import { CandidateType, ClassifiedResult, SourceItem } from "./types";
 import { resolveEntity, computeFitScore, evidenceConfidenceLabel, classifyPartnerType } from "./entity";
 
 export class ClassifierError extends Error {}
 
 const EVIDENCE_TYPES = ["Promo code", "Affiliate link", "Referral", "Review", "Ambassador", "Partner"] as const;
+
+/**
+ * The requesting business's own Partner Intent Profile (see business.ts),
+ * passed into classification so the model can tell "shares a keyword"
+ * apart from "is actually the same commercial category/role" -- e.g. BBQ
+ * smoker pellets vs. heating/fuel biomass pellets both contain "pellets",
+ * but are different commercial categories; a page merely monetizing
+ * content ("affiliate links") isn't relevant to a business it has no
+ * category/role connection to. A minimal, decoupled shape (not imported
+ * from business.ts directly) so classify.ts doesn't need to know that
+ * module's full BusinessProfile shape -- route.ts builds this from it.
+ */
+export interface BusinessContext {
+  category: string | null;
+  businessModel: string | null;
+  targetCustomers: string | null;
+  market: string | null;
+  commercialIntentConcepts: string[];
+}
+
+function buildBusinessContextBlock(context: BusinessContext): string {
+  const lines = [
+    `- Category: ${context.category ?? "unknown"}`,
+    `- Business model: ${context.businessModel ?? "unknown"}`,
+    `- Target customers: ${context.targetCustomers ?? "unknown"}`,
+    `- Primary market/geography: ${context.market ?? "unknown"}`,
+  ];
+  if (context.commercialIntentConcepts.length > 0) {
+    lines.push(`- Relevant partner-search concepts: ${context.commercialIntentConcepts.join(", ")}`);
+  }
+  return `
+Business context for the company running this scan (use this to judge REAL relevance, not just shared vocabulary):
+${lines.join("\n")}
+
+CRITICAL semantic rule: a shared keyword is NOT evidence of relevance. Judge whether a result is genuinely about the SAME commercial category/product/role as this business, not merely whether it shares a word. For example, if this business sells heating/fuel biomass pellets, a page about BBQ smoker pellets shares the word "pellets" but is a completely different commercial category and market -- mark validCandidate: false. Likewise, evidence that an entity merely monetizes content in general (e.g. generic "affiliate links" with no stated category) does NOT by itself establish relevance to THIS business -- it must be both categorically relevant AND make commercial sense as a partner for what this business actually sells/does.`;
+}
 
 /**
  * Classification latency scales with how many items are in one call --
@@ -19,10 +55,11 @@ export const MAX_CLASSIFY_INPUT = 15;
 
 const TOOL_NAME = "report_classifications";
 
-function buildSystemPrompt(brand: string, domain: string): string {
+function buildSystemPrompt(brand: string, domain: string, businessContext: BusinessContext): string {
   return `You are a conservative research analyst for Partnra, an affiliate-recruitment intelligence tool.
 
-You are given public web, YouTube, Instagram and TikTok results gathered while searching for people or sites already commercially promoting the brand "${brand}" (domain: ${domain}). Each item already states which platform it came from — you do not need to guess that.
+You are given public web, YouTube, Instagram and TikTok results gathered while searching for people or sites already commercially promoting the COMPETITOR brand "${brand}" (domain: ${domain}). Each item already states which platform it came from — you do not need to guess that.
+${buildBusinessContextBlock(businessContext)}
 
 For EACH result, decide:
 1. Is this result actually about "${brand}" specifically (not a different, similarly-named brand)?
@@ -34,6 +71,7 @@ For EACH result, decide:
 Rules:
 - NEVER infer an affiliate relationship purely from a brand mention. A normal customer review, a casual forum/comment, a news article, or an unrelated coupon-aggregator page is NOT sufficient — mark validCandidate: false.
 - Only set validCandidate: true when there is a personalized promo code, an affiliate/referral link, a disclosed ambassador/partner relationship, or a dedicated commercial review/video with a clear purchase/referral call to action.
+- A result that IS "${brand}"'s own official affiliate/partner program page (not a third party promoting it) still gets validCandidate: true here if it shows real affiliate-program evidence — route.ts separately reclassifies competitor-owned infrastructure after this step, so just judge the evidence honestly.
 - confidence 90-100: explicit personalized promo code, affiliate disclosure, or referral link tied directly to the creator.
 - confidence 80-89: strong commercial recommendation plus a clear purchase/referral signal.
 - confidence 70-79: multiple promotional signals, but the affiliate relationship is not fully explicit.
@@ -75,7 +113,18 @@ const CLASSIFY_SCHEMA = {
  * identity consistent across strategies, which is also what makes
  * cross-source dedup by entity (dedupe.ts) actually work.
  */
-function buildCandidateFields(source: SourceItem | undefined, signalStrength: "strong" | "medium" | "potential", verified: boolean) {
+/** This scan's dynamically-generated partner-type priorities (see business.ts's BusinessProfile) -- which types matter is decided per business, never hardcoded per industry. */
+export interface PartnerTypeIntent {
+  prioritized: ReadonlySet<CandidateType>;
+  deprioritized: ReadonlySet<CandidateType>;
+}
+
+function buildCandidateFields(
+  source: SourceItem | undefined,
+  signalStrength: "strong" | "medium" | "potential",
+  verified: boolean,
+  intent?: PartnerTypeIntent
+) {
   const entity = source
     ? resolveEntity(source)
     : { name: null, profileUrl: null, type: "Other" as const, applicationUrl: null };
@@ -87,12 +136,23 @@ function buildCandidateFields(source: SourceItem | undefined, signalStrength: "s
     evidenceConfidence: evidenceConfidenceLabel(signalStrength, verified),
     // Placeholder using sourceCount:1 -- dedupe.ts recomputes this after
     // merging duplicate sightings, when the real sourceCount is known.
-    fitScore: computeFitScore({ signalStrength, verified, type: entity.type, sourceCount: 1, hasApplicationRoute: !!entity.applicationUrl }),
+    fitScore: computeFitScore({
+      signalStrength,
+      verified,
+      type: entity.type,
+      sourceCount: 1,
+      hasApplicationRoute: !!entity.applicationUrl,
+      prioritizedTypes: intent?.prioritized,
+      deprioritizedTypes: intent?.deprioritized,
+    }),
     // Cross-candidate templated/doorway-network detection can only run once
     // the full pool is assembled -- see dedupe.ts's flagDuplicateEvidenceNetworks,
     // which overwrites these once the real comparison is possible.
     similarEvidenceNetwork: false,
     similarEvidenceDomainCount: 0,
+    // Only ever set later, from a real evidence-based heuristic (see
+    // route.ts) -- never guessed here at initial classification time.
+    potentialRelationship: null,
   };
 }
 
@@ -100,7 +160,9 @@ export async function classifyResults(
   items: SourceItem[],
   brand: string,
   domain: string,
-  signal: AbortSignal
+  businessContext: BusinessContext,
+  signal: AbortSignal,
+  intent?: PartnerTypeIntent
 ): Promise<ClassifiedResult[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -123,7 +185,7 @@ export async function classifyResults(
     body: JSON.stringify({
       model,
       max_tokens: 4096,
-      system: buildSystemPrompt(brand, domain),
+      system: buildSystemPrompt(brand, domain, businessContext),
       messages: [
         { role: "user", content: `Classify these ${items.length} results:\n\n${numbered}` },
       ],
@@ -175,7 +237,7 @@ export async function classifyResults(
         promoCode: typeof item.promoCode === "string" ? item.promoCode : null,
         confidence: typeof item.confidence === "number" ? item.confidence : 0,
         reason: typeof item.reason === "string" ? item.reason : "",
-        ...buildCandidateFields(source, signalStrength, verified),
+        ...buildCandidateFields(source, signalStrength, verified, intent),
       };
     })
     .filter((item) => item.sourceUrl);
@@ -199,25 +261,28 @@ const CATEGORY_STRENGTH: Record<(typeof CATEGORY_EVIDENCE_TYPES)[number], "mediu
   "Distributor fit": "potential",
 };
 
-function buildCategorySystemPrompt(category: string): string {
+function buildCategorySystemPrompt(category: string, businessContext: BusinessContext): string {
   return `You are a conservative research analyst for Partnra, a partner-discovery tool.
 
 The user's business could not be confidently matched to enough comparable competitor brands with an established partner presence, so you are given public web, YouTube and OpenAI web-search results gathered while searching directly for people, publishers or companies already commercially engaged with the product category "${category}" -- not tied to any specific named competitor.
+${buildBusinessContextBlock(businessContext)}
 
 For EACH result, decide:
-1. Is this genuinely about the category "${category}" (not an unrelated topic that just shares a keyword)?
-2. What kind of real commercial engagement does it show, if any:
+1. Is this genuinely about the SAME commercial category as "${category}" for THIS business (not a different category/product/market that happens to share a keyword -- see the semantic rule above)?
+2. Does the entity's own commercial role actually make sense as a partner for this business, given its business model/target customers above -- not just "it monetizes something" or "it has affiliate links" in general?
+3. What kind of real commercial engagement does it show, if any:
    - "Category affiliate": an active affiliate/referral/sponsorship arrangement for products in this category (a promo code, tracked link, disclosed partnership) -- just not tied to one specific competitor brand.
    - "Category review": either (a) substantive, dedicated review/comparison/roundup content specifically about this product category with real purchase or recommendation intent, OR (b) a creator/publisher/channel whose visible content clearly, repeatedly and commercially engages with this category -- ongoing coverage, comparisons, or ranked recommendations within it -- even without one explicit purchase call-to-action in this particular snippet. A single passing mention or an unrelated brand namecheck is still NOT enough either way.
    - "Distributor fit": a real retailer, distributor, reseller, publisher or creator whose actual, visible catalogue/content shows a genuinely plausible commercial fit for this category (e.g. a real product listing page, or a channel/site clearly operating commercially within adjacent categories) -- but with no confirmed existing relationship to any specific brand in this category. Never guessed from a generic "About us" page or from category relevance alone with no real evidence of that fit visible.
-3. What exactly is the evidence, in one sentence, closely paraphrasing what you saw in the title/snippet?
-4. How strong is that evidence, as a confidence 0-100 within this category strategy (these numbers are NOT comparable to a direct-competitor match -- they only rank within this batch):
-   - 80-100: explicit, clearly commercial engagement with the category (a working affiliate mechanism, or a dedicated, substantial review with clear intent).
-   - 60-79: genuine, real coverage or catalogue fit, but the commercial relationship or intent is less explicit.
-   - Below 60: not enough real evidence -- mark validCandidate: false.
+4. What exactly is the evidence, in one sentence, closely paraphrasing what you saw in the title/snippet?
+5. How strong is that evidence, as a confidence 0-100 within this category strategy (these numbers are NOT comparable to a direct-competitor match -- they only rank within this batch):
+   - 80-100: explicit, clearly commercial engagement with the SAME category and a role that plausibly fits this business.
+   - 60-79: genuine, real coverage or catalogue fit, but the commercial relationship, category match, or role fit is less explicit.
+   - Below 60: not enough real evidence, or the category/role match is unclear -- mark validCandidate: false.
 
 Rules:
 - NEVER infer any of the three evidence types from a single generic brand/category mention, a news article, a forum comment, or an unrelated coupon-aggregator page.
+- NEVER treat a shared keyword as category relevance -- e.g. "pellets" alone does not mean heating/fuel biomass pellets and BBQ smoker pellets are the same category; a law firm's compliance content does not mean it is a partner for every other regulated business. Judge the actual product/service/audience, not the word.
 - NEVER claim "Distributor fit" without a real, visible catalogue/product page as evidence -- not speculation about what a company might plausibly sell.
 - Return exactly one classification per input result, referencing its index.`;
 }
@@ -255,7 +320,9 @@ const CATEGORY_CLASSIFY_SCHEMA = {
 export async function classifyCategoryResults(
   items: SourceItem[],
   category: string,
-  signal: AbortSignal
+  businessContext: BusinessContext,
+  signal: AbortSignal,
+  intent?: PartnerTypeIntent
 ): Promise<ClassifiedResult[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -278,7 +345,7 @@ export async function classifyCategoryResults(
     body: JSON.stringify({
       model,
       max_tokens: 4096,
-      system: buildCategorySystemPrompt(category),
+      system: buildCategorySystemPrompt(category, businessContext),
       messages: [
         { role: "user", content: `Classify these ${items.length} results:\n\n${numbered}` },
       ],
@@ -329,7 +396,7 @@ export async function classifyCategoryResults(
         promoCode: null,
         confidence: typeof item.confidence === "number" ? item.confidence : 0,
         reason: typeof item.reason === "string" ? item.reason : "",
-        ...buildCandidateFields(source, signalStrength, verified),
+        ...buildCandidateFields(source, signalStrength, verified, intent),
       };
     })
     .filter((item): item is ClassifiedResult => item !== null && !!item.sourceUrl);
@@ -354,7 +421,16 @@ const UNVERIFIED_SIGNAL_WORDS = [
 // density. Kept separate from (and smaller a boost than) computeFitScore's
 // own type bonus in entity.ts: this only nudges the *evidence* confidence
 // number itself, not the fit score.
-const RICH_EVIDENCE_TYPES = new Set(["Affiliate", "Review site", "Creator"]);
+const RICH_EVIDENCE_TYPES = new Set<CandidateType>([
+  "Affiliate",
+  "Affiliate Network",
+  "Review site",
+  "Creator",
+  "Distributor",
+  "Wholesaler",
+  "Importer",
+  "Professional services firm",
+]);
 
 /**
  * Deterministic, non-AI fallback for when real classification couldn't
@@ -378,17 +454,63 @@ const RICH_EVIDENCE_TYPES = new Set(["Affiliate", "Review site", "Creator"]);
  * genuinely less differentiated evidence than a page showing real
  * affiliate-program language) and whether a concrete discount pattern
  * (e.g. "30% off") is actually present, not just implied by a keyword.
+ *
+ * A plain keyword scorer genuinely cannot disambiguate "same word,
+ * different category" the way an LLM reading real context can (BBQ smoker
+ * pellets vs. heating/fuel biomass pellets both match "pellets") -- that
+ * real semantic judgement only happens in the AI classification path (see
+ * classifyCategoryResults). `categoryPhrases`, when the caller has them
+ * (this business's own detected category/keywords/commercial-intent
+ * concepts), is an honest, limited backstop: it doesn't prove the category
+ * matches, it only down-weights items with little to no word overlap with
+ * this business's own vocabulary, which is weaker evidence of relevance
+ * than a generic affiliate/coupon keyword hit alone. Word-level overlap
+ * (not a whole-phrase substring match) because a real page rarely repeats
+ * an AI-generated concept phrase verbatim -- a light singularization
+ * (strip a trailing "s") bridges the extremely common "pellet"/"pellets"
+ * case without attempting real stemming.
  */
-export function scoreUnverified(items: SourceItem[]): ClassifiedResult[] {
+function singularize(word: string): string {
+  return word.replace(/s$/i, "");
+}
+
+function significantWords(phrase: string): string[] {
+  return phrase
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 3)
+    .map(singularize);
+}
+
+export function scoreUnverified(
+  items: SourceItem[],
+  categoryPhrases: string[] = [],
+  intent?: PartnerTypeIntent
+): ClassifiedResult[] {
+  const phraseWordSets = categoryPhrases.map(significantWords).filter((words) => words.length > 0);
+
   return items.map((item) => {
     const text = `${item.title} ${item.snippet}`.toLowerCase();
     const matched = UNVERIFIED_SIGNAL_WORDS.filter((w) => text.includes(w));
     const type = classifyPartnerType(item);
 
+    const textWords = new Set(
+      text
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 3)
+        .map(singularize)
+    );
+    const hasCategoryOverlap =
+      phraseWordSets.length === 0 ||
+      phraseWordSets.some((words) => words.filter((w) => textWords.has(w)).length / words.length >= 0.5);
+
     let confidence = 22 + Math.min(matched.length * 6, 18);
     if (RICH_EVIDENCE_TYPES.has(type)) confidence += 8;
     if (type === "Coupon publisher") confidence -= 6;
     if (/\b\d{1,3}\s?%\s*(off|discount)\b/i.test(text)) confidence += 5;
+    if (!hasCategoryOverlap) confidence -= 10;
     confidence = Math.max(15, Math.min(58, Math.round(confidence)));
 
     const signalStrength = "potential" as const;
@@ -408,7 +530,7 @@ export function scoreUnverified(items: SourceItem[]): ClassifiedResult[] {
         matched.length > 0
           ? `Not yet AI-verified — surfaced by search; the title/snippet mentions ${matched.slice(0, 2).join(", ")}.`
           : "Not yet AI-verified — surfaced by search, shown as a lower-confidence lead pending full evidence review.",
-      ...buildCandidateFields(item, signalStrength, verified),
+      ...buildCandidateFields(item, signalStrength, verified, intent),
     };
   });
 }
@@ -424,8 +546,12 @@ export function scoreUnverified(items: SourceItem[]): ClassifiedResult[] {
  * is "surface real signal AI didn't confirm", not "show literally
  * everything discovered".
  */
-export function scoreUnverifiedIfSignal(items: SourceItem[]): ClassifiedResult[] {
-  return scoreUnverified(items).filter((r) => r.confidence > 27);
+export function scoreUnverifiedIfSignal(
+  items: SourceItem[],
+  categoryPhrases: string[] = [],
+  intent?: PartnerTypeIntent
+): ClassifiedResult[] {
+  return scoreUnverified(items, categoryPhrases, intent).filter((r) => r.confidence > 27);
 }
 
 /**

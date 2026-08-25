@@ -52,12 +52,16 @@ export function isYoutubeConfigured(): boolean {
 }
 
 /** Optional source — unconfigured or failing is not fatal to the scan. */
-export async function discoverFromYoutube(brand: string, signal: AbortSignal): Promise<SourceItem[]> {
+export async function discoverFromYoutube(
+  brand: string,
+  signal: AbortSignal,
+  commercialIntentConcepts: string[] = []
+): Promise<SourceItem[]> {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) return [];
 
   try {
-    const queries = buildYoutubeQueries(brand);
+    const queries = buildYoutubeQueries(brand, commercialIntentConcepts);
     const batches = await Promise.all(queries.map((q) => searchYoutube(q, apiKey, signal)));
     return batches.flat();
   } catch (err) {
@@ -70,13 +74,14 @@ export async function discoverFromYoutube(brand: string, signal: AbortSignal): P
 export async function discoverCategoryFromYoutube(
   category: string,
   keywords: string[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  commercialIntentConcepts: string[] = []
 ): Promise<SourceItem[]> {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) return [];
 
   try {
-    const queries = buildCategoryYoutubeQueries(category, keywords);
+    const queries = buildCategoryYoutubeQueries(category, keywords, commercialIntentConcepts);
     const batches = await Promise.all(queries.map((q) => searchYoutube(q, apiKey, signal)));
     return batches.flat();
   } catch (err) {

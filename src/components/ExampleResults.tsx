@@ -25,6 +25,7 @@ const EXAMPLE_CANDIDATES: Candidate[] = [
     applicationUrl: null,
       similarEvidenceNetwork: false,
       similarEvidenceDomainCount: 0,
+      potentialRelationship: null,
     reason: "Named creator with a personalized discount code, corroborated across two platforms.",
   },
   {
@@ -47,6 +48,7 @@ const EXAMPLE_CANDIDATES: Candidate[] = [
     applicationUrl: null,
       similarEvidenceNetwork: false,
       similarEvidenceDomainCount: 0,
+      potentialRelationship: null,
     reason: "Outbound link carries an affiliate tracking parameter.",
   },
   {
@@ -69,6 +71,7 @@ const EXAMPLE_CANDIDATES: Candidate[] = [
     applicationUrl: null,
       similarEvidenceNetwork: false,
       similarEvidenceDomainCount: 0,
+      potentialRelationship: null,
     reason: "Disclosed partnership plus a dedicated discount page.",
   },
 ];

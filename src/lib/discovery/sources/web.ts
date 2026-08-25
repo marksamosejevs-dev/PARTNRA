@@ -52,7 +52,12 @@ export function isWebSearchConfigured(): boolean {
  * The one required source — if this fails outright (not just zero results),
  * the whole scan fails, unlike the optional YouTube/Instagram/TikTok sources.
  */
-export async function discoverFromWeb(brand: string, domain: string, signal: AbortSignal): Promise<SourceItem[]> {
+export async function discoverFromWeb(
+  brand: string,
+  domain: string,
+  signal: AbortSignal,
+  commercialIntentConcepts: string[] = []
+): Promise<SourceItem[]> {
   const apiKey = process.env.SERPER_API_KEY;
   if (!apiKey) {
     throw new SearchProviderError("SERPER_API_KEY is not configured");
@@ -63,7 +68,7 @@ export async function discoverFromWeb(brand: string, domain: string, signal: Abo
     throw new SearchProviderError(`Unknown SEARCH_PROVIDER "${provider}"`);
   }
 
-  const queries = buildSearchQueries(brand, domain);
+  const queries = buildSearchQueries(brand, domain, commercialIntentConcepts);
   return runSerperQueries(queries, apiKey, signal);
 }
 
@@ -76,13 +81,14 @@ export async function discoverFromWeb(brand: string, domain: string, signal: Abo
 export async function discoverCategoryFromWeb(
   category: string,
   keywords: string[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  commercialIntentConcepts: string[] = []
 ): Promise<SourceItem[]> {
   const apiKey = process.env.SERPER_API_KEY;
   if (!apiKey) return [];
 
   try {
-    const queries = buildCategoryQueries(category, keywords);
+    const queries = buildCategoryQueries(category, keywords, commercialIntentConcepts);
     return await runSerperQueries(queries, apiKey, signal);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;

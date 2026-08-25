@@ -85,12 +85,16 @@ export function isOpenAISearchConfigured(): boolean {
 }
 
 /** Optional source — unconfigured or failing is not fatal to the scan. */
-export async function discoverFromOpenAI(brand: string, signal: AbortSignal): Promise<SourceItem[]> {
+export async function discoverFromOpenAI(
+  brand: string,
+  signal: AbortSignal,
+  commercialIntentConcepts: string[] = []
+): Promise<SourceItem[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return [];
 
   try {
-    const queries = buildOpenAISearchQueries(brand);
+    const queries = buildOpenAISearchQueries(brand, commercialIntentConcepts);
     const batches = await Promise.all(queries.map((q) => searchOpenAI(q, apiKey, signal)));
     return batches.flat();
   } catch (err) {
@@ -103,13 +107,14 @@ export async function discoverFromOpenAI(brand: string, signal: AbortSignal): Pr
 export async function discoverCategoryFromOpenAI(
   category: string,
   keywords: string[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  commercialIntentConcepts: string[] = []
 ): Promise<SourceItem[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return [];
 
   try {
-    const queries = buildCategoryOpenAISearchQueries(category, keywords);
+    const queries = buildCategoryOpenAISearchQueries(category, keywords, commercialIntentConcepts);
     const batches = await Promise.all(queries.map((q) => searchOpenAI(q, apiKey, signal)));
     return batches.flat();
   } catch (err) {

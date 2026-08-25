@@ -96,6 +96,13 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
             </span>
           </div>
         )}
+        {candidate.potentialRelationship && (
+          <div className="inline-flex items-center gap-2 rounded-full bg-lime/15 px-3 py-1">
+            <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/60">
+              {candidate.potentialRelationship}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="mt-4">

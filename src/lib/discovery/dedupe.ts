@@ -1,6 +1,7 @@
 import { Candidate, ClassifiedResult, SignalStrength } from "./types";
 import { computeFitScore } from "./entity";
 import { flagDuplicateEvidenceNetworks } from "./duplicateNetwork";
+import { PartnerTypeIntent } from "./classify";
 
 const STRENGTH_RANK: Record<SignalStrength, number> = { strong: 2, medium: 1, potential: 0 };
 
@@ -63,7 +64,7 @@ function mergePlatforms(a: string | null, b: string | null): string | null {
  * equally-confident single-source one -- without inflating the confidence
  * number itself.
  */
-export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
+export function dedupeCandidates(items: ClassifiedResult[], intent?: PartnerTypeIntent): Candidate[] {
   const merged: Candidate[] = [];
 
   for (const item of items) {
@@ -91,6 +92,7 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       // see flagDuplicateEvidenceNetworks.
       similarEvidenceNetwork: false,
       similarEvidenceDomainCount: 0,
+      potentialRelationship: item.potentialRelationship,
       reason: item.reason,
     };
 
@@ -126,6 +128,7 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       // A real affiliate/apply page found on either sighting is worth
       // keeping even if the primary (higher-ranked) sighting didn't have one.
       applicationUrl: primary.applicationUrl ?? secondary.applicationUrl,
+      potentialRelationship: primary.potentialRelationship ?? secondary.potentialRelationship,
       sourceCount: existing.sourceCount + 1,
     };
   }
@@ -141,6 +144,8 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       type: c.type,
       sourceCount: c.sourceCount,
       hasApplicationRoute: !!c.applicationUrl,
+      prioritizedTypes: intent?.prioritized,
+      deprioritizedTypes: intent?.deprioritized,
     }),
   }));
 

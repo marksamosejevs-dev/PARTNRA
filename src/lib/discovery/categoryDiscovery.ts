@@ -6,6 +6,8 @@ import {
   scoreUnverifiedIfSignal,
   sampleAcrossSources,
   MAX_CLASSIFY_INPUT,
+  BusinessContext,
+  PartnerTypeIntent,
 } from "./classify";
 import { discoverCategoryFromWeb } from "./sources/web";
 import { discoverCategoryFromOpenAI } from "./sources/openai";
@@ -48,12 +50,13 @@ export async function fetchCategoryPool(
     return { pool: [], itemsSearched: 0 };
   }
   const keywords = profile.keywords;
+  const concepts = profile.commercialIntentConcepts;
 
   log.mark("category_discovery_start", { category });
   const [webResult, openai, youtube] = await Promise.all([
-    withFallback((signal) => discoverCategoryFromWeb(category, keywords, signal), sourceMs, "category web search", []),
-    withFallback((signal) => discoverCategoryFromOpenAI(category, keywords, signal), sourceMs, "category OpenAI search", []),
-    withFallback((signal) => discoverCategoryFromYoutube(category, keywords, signal), sourceMs, "category YouTube search", []),
+    withFallback((signal) => discoverCategoryFromWeb(category, keywords, signal, concepts), sourceMs, "category web search", []),
+    withFallback((signal) => discoverCategoryFromOpenAI(category, keywords, signal, concepts), sourceMs, "category OpenAI search", []),
+    withFallback((signal) => discoverCategoryFromYoutube(category, keywords, signal, concepts), sourceMs, "category YouTube search", []),
   ]);
   log.mark("category_discovery_end", {
     foundWeb: webResult.length,
@@ -120,17 +123,26 @@ export interface CategoryClassifyResult {
 export async function classifyCategoryPool(
   pool: SourceItem[],
   category: string,
+  businessContext: BusinessContext,
   parentSignal: AbortSignal,
   classifyMs: number,
   log: ReturnType<typeof createScanLogger>,
   /** totalCandidates/deduplicated come from the earlier fetch+filter stages (fetchCategoryPool + the competitor-domain filter), which this function doesn't see directly -- passed in so the returned funnel covers the whole strategy, not just this stage. */
-  priorFunnel: { totalCandidates: number; deduplicated: number }
+  priorFunnel: { totalCandidates: number; deduplicated: number },
+  intent?: PartnerTypeIntent
 ): Promise<CategoryClassifyResult> {
   const funnel: StrategyFunnel = { ...priorFunnel, sentToAI: 0, aiClassified: 0, timedOutFallbackScored: 0, rescuedScored: 0, rejectedWeakEvidence: 0 };
 
   if (pool.length === 0) {
     return { classified: [], funnel };
   }
+
+  // Backstop phrase list for the deterministic fallback scorer -- a plain
+  // keyword scorer can't truly disambiguate "same word, different
+  // category" the way the AI classification prompt above now can (see
+  // classify.ts's buildBusinessContextBlock); this only down-weights items
+  // with NO overlap at all with this business's own vocabulary.
+  const categoryPhrases = [category, ...businessContext.commercialIntentConcepts];
 
   const classifyInput = sampleAcrossSources(pool, MAX_CLASSIFY_INPUT);
   const classifyInputUrls = new Set(classifyInput.map((i) => i.url));
@@ -140,7 +152,7 @@ export async function classifyCategoryPool(
   log.mark("category_classification_start", { poolSize: pool.length, sentToAI: classifyInput.length });
   try {
     const aiResult = await raceWithTimeout(
-      (signal) => classifyCategoryResults(classifyInput, category, signal),
+      (signal) => classifyCategoryResults(classifyInput, category, businessContext, signal, intent),
       classifyMs,
       "category classification",
       parentSignal
@@ -149,7 +161,7 @@ export async function classifyCategoryPool(
 
     const aiRejectedUrls = new Set(aiResult.filter((r) => !r.validCandidate).map((r) => r.sourceUrl));
     const rejectedItems = classifyInput.filter((item) => aiRejectedUrls.has(item.url));
-    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow]);
+    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow], categoryPhrases, intent);
     funnel.rescuedScored = rescued.length;
     funnel.rejectedWeakEvidence = aiRejectedUrls.size + overflow.length - rescued.length;
 
@@ -162,7 +174,7 @@ export async function classifyCategoryPool(
     return { classified, funnel };
   } catch (err) {
     log.fail("category_classification", err);
-    const classified = scoreUnverified(pool);
+    const classified = scoreUnverified(pool, categoryPhrases, intent);
     funnel.timedOutFallbackScored = classified.length;
     log.mark("category_classification_end", { classified: classified.length, verified: false });
     return { classified, funnel };

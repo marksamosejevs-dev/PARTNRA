@@ -2,6 +2,7 @@ import { promises as dns } from "dns";
 import { raceValueWithTimeout, StageTimeoutError } from "./timeout";
 import { ScanLogger } from "./scanLogger";
 import { fetchBusinessContextFromOpenAI } from "./sources/openai";
+import { CANDIDATE_TYPES, CandidateType } from "./types";
 
 export class BusinessAnalysisError extends Error {}
 
@@ -287,12 +288,31 @@ export async function fetchBusinessContextFromWeb(
   return parts.length > 0 ? parts.join("\n\n") : null;
 }
 
+const BUSINESS_MODELS = ["B2B", "B2C", "Marketplace", "Hybrid"] as const;
+
 export interface BusinessProfile {
   category: string | null;
   market: string | null;
   keywords: string[];
   /** Real, well-known, specific brand names the model is confident are genuinely comparable -- never invented. */
   competitorNames: string[];
+  /**
+   * The Partner Intent Profile: how this specific business actually grows,
+   * generated dynamically from the same real content/context as the rest
+   * of this profile -- never a hardcoded per-industry template. This is
+   * what lets partner-type prioritization, query generation, and fit
+   * scoring differ between a DTC supplement brand and a B2B biomass
+   * wholesaler without any industry-specific branching in code.
+   */
+  businessModel: (typeof BUSINESS_MODELS)[number] | null;
+  targetCustomers: string | null;
+  salesModel: string | null;
+  /** Which of the fixed CandidateType taxonomy (see types.ts) are actually worth searching for, GIVEN this business -- not every type matters for every business. */
+  prioritizedPartnerTypes: CandidateType[];
+  /** Types that are a poor fit for this business specifically (e.g. Creator for a heavy-industrial B2B wholesaler) -- down-weighted in ranking, not necessarily excluded outright. */
+  deprioritizedPartnerTypes: CandidateType[];
+  /** Short, concrete search concepts combining product + partner role + commercial intent (e.g. "ENplus pellet importer", "compliance consultancy referral partner") -- used to generate real discovery queries instead of a one-size-fits-all "affiliate"/"discount code" pattern. Model-generated per business, never a fixed list. */
+  commercialIntentConcepts: string[];
 }
 
 const TOOL_NAME = "report_business_profile";
@@ -304,6 +324,12 @@ const SCHEMA = {
     market: { type: ["string", "null"] },
     keywords: { type: "array", items: { type: "string" }, maxItems: 5 },
     competitorNames: { type: "array", items: { type: "string" }, maxItems: 3 },
+    businessModel: { type: ["string", "null"], enum: [...BUSINESS_MODELS, null] },
+    targetCustomers: { type: ["string", "null"] },
+    salesModel: { type: ["string", "null"] },
+    prioritizedPartnerTypes: { type: "array", items: { type: "string", enum: [...CANDIDATE_TYPES] }, maxItems: 8 },
+    deprioritizedPartnerTypes: { type: "array", items: { type: "string", enum: [...CANDIDATE_TYPES] }, maxItems: 6 },
+    commercialIntentConcepts: { type: "array", items: { type: "string" }, maxItems: 6 },
   },
   required: ["category", "keywords", "competitorNames"],
 };
@@ -316,11 +342,18 @@ You are given either the real homepage content of a business, or (when the homep
 2. Their primary market/geography if it's actually determinable from the content (e.g. "United States"); otherwise null. Never guess a market you can't support from the page.
 3. Up to 5 short search keywords describing what they sell.
 4. Up to 3 REAL, well-known, specific brand names that are genuinely comparable competitors in the same category.
+5. Their business model: one of ${BUSINESS_MODELS.join(", ")}, or null if genuinely unclear.
+6. Their target customers, in a short phrase (e.g. "consumers buying direct online", "commercial heating installers", "corporate legal departments") -- null if unclear.
+7. Their likely sales/acquisition model, in a short phrase (e.g. "direct-to-consumer online checkout", "B2B wholesale through distributors", "client referrals and repeat engagements") -- null if unclear.
+8. Which partner types (choose ONLY from this fixed list: ${CANDIDATE_TYPES.join(", ")}) would actually be USEFUL for THIS specific business to find as partners, given its real business model -- up to 8, most useful first. A consumer supplement brand and an industrial biomass wholesaler should get different lists here; do not default to the same types for every business.
+9. Which of those same fixed types would be a POOR fit or low priority for this specific business (e.g. "Creator" for a heavy-industrial B2B wholesaler, "Coupon publisher" for a professional-services firm) -- up to 6.
+10. Up to 6 short, concrete search concepts combining product/category + partner role + commercial intent that would actually find those prioritized partner types (e.g. for a biomass wholesaler: "wood pellet distributor", "ENplus pellet importer", "biomass wholesaler"; for a law firm: "compliance consultancy referral partner", "corporate services provider"). These become real search queries, so make them concrete and specific to what THIS business actually needs -- never generic "affiliate program" boilerplate unless that genuinely is how this business's partners are found.
 
 Rules:
 - Only name a competitor brand if you are confident it is a real, currently-operating company genuinely comparable to this business. If you are not confident, return fewer names or an empty list -- never invent or guess a brand name to fill the list.
 - Do not include the business's own brand in competitorNames.
-- Base category/market/keywords only on what the provided content actually supports -- whether that's the homepage text or the search snippets.`;
+- Base every field only on what the provided content actually supports -- whether that's the homepage text or the search snippets. If you cannot confidently determine businessModel/targetCustomers/salesModel, or which partner types actually fit, return null/empty arrays rather than guessing -- an empty or partial Partner Intent Profile is honest; a guessed one is not.
+- Never invent a commercialIntentConcept that doesn't logically follow from the category/business model you actually identified.`;
 }
 
 function buildUserPrompt(
@@ -388,6 +421,18 @@ export async function identifyBusiness(
     throw new BusinessAnalysisError("LLM business analysis returned an unexpected shape");
   }
 
+  const validTypes = new Set<string>(CANDIDATE_TYPES);
+  const isCandidateType = (v: unknown): v is CandidateType => typeof v === "string" && validTypes.has(v);
+  const prioritizedPartnerTypes = Array.isArray(parsed.prioritizedPartnerTypes)
+    ? parsed.prioritizedPartnerTypes.filter(isCandidateType).slice(0, 8)
+    : [];
+  // A type the model listed as both a priority and a low priority is
+  // contradictory input -- drop it from the deprioritized side rather than
+  // guess which the model meant, so the two lists stay genuinely disjoint.
+  const deprioritizedPartnerTypes = Array.isArray(parsed.deprioritizedPartnerTypes)
+    ? parsed.deprioritizedPartnerTypes.filter(isCandidateType).filter((t) => !prioritizedPartnerTypes.includes(t)).slice(0, 6)
+    : [];
+
   return {
     category: typeof parsed.category === "string" ? parsed.category : null,
     market: typeof parsed.market === "string" ? parsed.market : null,
@@ -396,6 +441,16 @@ export async function identifyBusiness(
       : [],
     competitorNames: Array.isArray(parsed.competitorNames)
       ? parsed.competitorNames.filter((k): k is string => typeof k === "string").slice(0, 3)
+      : [],
+    businessModel: (BUSINESS_MODELS as readonly string[]).includes(parsed.businessModel as string)
+      ? (parsed.businessModel as (typeof BUSINESS_MODELS)[number])
+      : null,
+    targetCustomers: typeof parsed.targetCustomers === "string" ? parsed.targetCustomers : null,
+    salesModel: typeof parsed.salesModel === "string" ? parsed.salesModel : null,
+    prioritizedPartnerTypes,
+    deprioritizedPartnerTypes,
+    commercialIntentConcepts: Array.isArray(parsed.commercialIntentConcepts)
+      ? parsed.commercialIntentConcepts.filter((k): k is string => typeof k === "string").slice(0, 6)
       : [],
   };
 }
