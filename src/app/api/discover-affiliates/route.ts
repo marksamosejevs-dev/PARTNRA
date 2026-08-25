@@ -131,8 +131,12 @@ function emptyResponse(
 /**
  * Runs source discovery + classification for one resolved competitor. Web,
  * OpenAI and YouTube each get their own bounded timeout and run in
- * parallel; only the required web source can still fail this outright,
- * since without it there's nothing to classify for this competitor.
+ * parallel. Web search (Serper) is the primary source, but its failure is
+ * captured rather than left to reject the surrounding Promise.all -- a
+ * Promise.all rejects as soon as ANY input rejects, which would otherwise
+ * throw away OpenAI/YouTube's results too even when they succeeded. Serper
+ * failing only actually fails this competitor once OpenAI and YouTube also
+ * came back with nothing to offer instead.
  */
 async function discoverForCompetitor(
   competitor: ResolvedCompetitor,
@@ -143,18 +147,18 @@ async function discoverForCompetitor(
   log.mark("openai_discovery_start", { domain: competitor.domain });
   log.mark("youtube_discovery_start", { domain: competitor.domain });
 
-  const [webResult, openai, youtube] = await Promise.all([
+  const [webOutcome, openai, youtube] = await Promise.all([
     raceWithTimeout(
       (signal) => discoverFromWeb(competitor.name, competitor.domain, signal),
       SOURCE_TIMEOUT_MS,
       `web search (${competitor.domain})`,
       parentSignal
-    ).catch((err) => {
-      log.fail("web_discovery", err, { domain: competitor.domain, provider: "serper", required: true });
-      // The required source: a real failure or timeout here is reported
-      // distinctly below, not silently swallowed into "zero results".
-      throw err;
-    }),
+    )
+      .then((items) => ({ ok: true as const, items }))
+      .catch((err) => {
+        log.fail("web_discovery", err, { domain: competitor.domain, provider: "serper" });
+        return { ok: false as const, error: err };
+      }),
     withFallback(
       (signal) => discoverFromOpenAI(competitor.name, signal),
       SOURCE_TIMEOUT_MS,
@@ -168,11 +172,25 @@ async function discoverForCompetitor(
       []
     ),
   ]);
-  log.mark("web_discovery_end", { domain: competitor.domain, found: webResult.length });
+  const webResult = webOutcome.ok ? webOutcome.items : [];
+  log.mark("web_discovery_end", {
+    domain: competitor.domain,
+    found: webResult.length,
+    failed: !webOutcome.ok,
+  });
   log.mark("openai_discovery_end", { domain: competitor.domain, found: openai.length });
   log.mark("youtube_discovery_end", { domain: competitor.domain, found: youtube.length });
 
   const combined: SourceItem[] = [...webResult, ...openai, ...youtube];
+
+  if (combined.length === 0) {
+    // Nothing came back from any source for this competitor. If web search
+    // specifically errored (rather than just legitimately finding zero
+    // results) and nothing else filled in either, that's the honest reason
+    // to report -- but only now, once every alternative has had its chance.
+    if (!webOutcome.ok) throw webOutcome.error;
+    return { classified: [], itemsSearched: 0 };
+  }
 
   const pool: SourceItem[] = [];
   const seenUrls = new Set<string>();
