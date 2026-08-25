@@ -42,20 +42,25 @@ export function OutreachDemo() {
     <section className="border-t border-ink/10 bg-surface py-24 md:py-36">
       <Container>
         <Reveal>
-          <h2 className="font-display max-w-2xl text-[clamp(1.9rem,5vw,3.4rem)] font-medium leading-[1.05] tracking-tight">
-            Not another 5,000-email spam machine.
-          </h2>
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="font-display max-w-2xl text-[clamp(1.9rem,5vw,3.4rem)] font-medium leading-[1.05] tracking-tight">
+              Not another 5,000-email spam machine.
+            </h2>
+            <span className="font-mono-label rounded-full bg-ink/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/40">
+              Early access
+            </span>
+          </div>
         </Reveal>
         <Reveal delay={0.06}>
           <p className="mt-4 max-w-xl text-lg text-ink/55 md:text-xl">
-            Alex researches before he writes.
+            From discovery to outreach: Alex researches before he writes.
           </p>
         </Reveal>
 
         <div className="mt-14 grid grid-cols-1 overflow-hidden rounded-3xl border border-ink/10 lg:grid-cols-2">
           <Reveal delay={0.1} className="bg-ink p-8 text-paper md:p-10">
             <div className="font-mono-label text-xs font-semibold uppercase tracking-[0.16em] text-paper/40">
-              Affiliate intelligence
+              Partner intelligence
             </div>
             <div className="mt-6 flex flex-col gap-4">
               {INTEL.map((item) => (
@@ -134,8 +139,8 @@ export function OutreachDemo() {
 
         <Reveal delay={0.24}>
           <p className="mt-6 max-w-xl text-sm text-ink/40">
-            Alex prepares the research and the draft. Nothing is sent automatically —
-            outreach is reviewed and approved by you.
+            A preview of where PARTNRA is headed: Alex prepares the research and the draft.
+            Nothing is ever sent automatically — outreach is reviewed and approved by you.
           </p>
         </Reveal>
       </Container>

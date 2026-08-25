@@ -25,7 +25,7 @@ export function NotJustInfluencers() {
 
         <Reveal delay={0.1}>
           <p className="mt-8 max-w-2xl text-lg leading-relaxed text-ink/60 md:text-xl">
-            A creator with 500,000 followers is not automatically a valuable affiliate.
+            A creator with 500,000 followers is not automatically a valuable partner.
             PARTNRA looks for evidence that someone already knows how to promote and
             monetise products.
           </p>

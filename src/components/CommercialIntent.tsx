@@ -50,7 +50,7 @@ export function CommercialIntent() {
           <Reveal delay={0.2} className="flex justify-center lg:justify-start">
             <div className="inline-flex flex-col items-center gap-2 rounded-3xl border border-lime/30 bg-lime/[0.06] px-10 py-8 text-center">
               <span className="font-mono-label text-xs font-semibold uppercase tracking-[0.2em] text-lime">
-                Affiliate score
+                PARTNRA fit
               </span>
               <span className="font-display text-5xl font-medium tracking-tight text-paper">
                 0–100

@@ -37,11 +37,18 @@ export function AffiliateProfile() {
             <div className="rounded-[2rem] border border-ink/10 bg-paper p-8 shadow-[0_30px_80px_-40px_rgba(10,10,10,0.25)] md:p-12">
               <div className="flex flex-wrap items-start justify-between gap-8">
                 <div>
-                  <div className="inline-flex items-center gap-2 rounded-full bg-lime/20 px-3 py-1">
-                    <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-lime" />
-                    <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/70">
-                      High intent
-                    </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex items-center gap-2 rounded-full bg-lime/20 px-3 py-1">
+                      <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-lime" />
+                      <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/70">
+                        High intent
+                      </span>
+                    </div>
+                    <div className="inline-flex items-center rounded-full border border-ink/10 px-3 py-1">
+                      <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/50">
+                        Affiliate creator
+                      </span>
+                    </div>
                   </div>
                   <h3 className="font-display mt-4 text-4xl font-medium tracking-tight md:text-5xl">
                     James Carter
@@ -53,7 +60,7 @@ export function AffiliateProfile() {
 
                 <div className="text-right">
                   <div className="font-mono-label text-xs font-semibold uppercase tracking-[0.16em] text-ink/40">
-                    Affiliate score
+                    PARTNRA fit
                   </div>
                   <div className="font-display mt-1 text-6xl font-medium tracking-tight md:text-7xl">
                     94<span className="text-2xl text-ink/30 md:text-3xl">/100</span>
@@ -104,7 +111,17 @@ export function AffiliateProfile() {
                 ))}
               </div>
 
-              <div className="mt-10">
+              <div className="mt-6">
+                <div className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/40">
+                  Why PARTNRA found this
+                </div>
+                <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-ink/60">
+                  Already promotes three supplement brands in your category, with a
+                  UK-majority audience and a business email on file.
+                </p>
+              </div>
+
+              <div className="mt-8">
                 <Button href="#audit" variant="secondary">
                   Recruit James
                 </Button>

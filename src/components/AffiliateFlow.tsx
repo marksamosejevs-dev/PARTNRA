@@ -4,9 +4,9 @@ import { motion, useReducedMotion } from "framer-motion";
 
 const STEPS = [
   { label: "YOUR COMPETITORS", detail: "Brands you compete with today" },
-  { label: "THEIR AFFILIATES", detail: "Creators, publishers, review sites" },
-  { label: "PARTNRA FINDS THEM", detail: "Signals, scoring, contact research", lime: true },
-  { label: "YOU RECRUIT THEM", detail: "Into your existing programme" },
+  { label: "THEIR PARTNERS", detail: "Creators, publishers, distributors" },
+  { label: "PARTNRA FINDS THEM", detail: "Signals, ranking, contact research", lime: true },
+  { label: "YOU RECRUIT THEM", detail: "Into active partnerships" },
 ];
 
 export function AffiliateFlow() {

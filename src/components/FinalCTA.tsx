@@ -9,7 +9,7 @@ export function FinalCTA() {
         <div className="mx-auto max-w-4xl text-center">
           <Reveal>
             <h2 className="font-display text-[clamp(2.2rem,7vw,5.4rem)] font-medium leading-[1.03] tracking-tight">
-              Your next 100 affiliates are already out there.
+              Your next 100 partners are already out there.
             </h2>
           </Reveal>
           <Reveal delay={0.1}>

@@ -82,7 +82,7 @@ function CreatorCard({
             (highlight ? "text-lime" : "text-ink/35")
           }
         >
-          PARTNRA score
+          PARTNRA fit
         </div>
         <div className="mt-3 flex items-end gap-4">
           <span

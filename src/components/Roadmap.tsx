@@ -9,7 +9,7 @@ const COLUMNS = [
     items: [
       "Discovery",
       "Competitor intelligence",
-      "Qualification",
+      "Ranking",
       "Contact discovery",
       "Outreach assistance",
     ],
@@ -17,13 +17,13 @@ const COLUMNS = [
   {
     label: "Next",
     tone: "next" as const,
-    items: ["Reply management", "Follow-ups", "AI negotiation", "Affiliate onboarding"],
+    items: ["Ongoing partner discovery", "Reply management", "Follow-ups", "AI negotiation", "Partner onboarding"],
   },
   {
     label: "Later",
     tone: "later" as const,
     items: [
-      "Affiliate tracking",
+      "Partner tracking",
       "Commission management",
       "Payouts",
       "Performance optimisation",

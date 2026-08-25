@@ -79,7 +79,7 @@ export function AuditForm() {
         <div className="mx-auto max-w-2xl text-center">
           <Reveal>
             <SectionLabel tone="lime" className="justify-center">
-              Free competitor affiliate audit
+              Free competitor partner audit
             </SectionLabel>
           </Reveal>
 
@@ -92,7 +92,7 @@ export function AuditForm() {
           <Reveal delay={0.16}>
             <p className="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-paper/55">
               Enter your store and Alex will analyse your category and prepare a snapshot
-              of potential affiliate opportunities around competing brands.
+              of potential partner opportunities around competing brands.
             </p>
           </Reveal>
 
@@ -106,7 +106,7 @@ export function AuditForm() {
                   </span>
                 </div>
                 <p className="mt-4 text-lg leading-relaxed text-paper/85">
-                  We&rsquo;ll prepare your competitor affiliate snapshot and send it to the
+                  We&rsquo;ll prepare your competitor partner snapshot and send it to the
                   email provided.
                 </p>
               </div>
@@ -149,7 +149,7 @@ export function AuditForm() {
                   disabled={state === "loading"}
                   className="group mt-5 inline-flex h-14 w-full items-center justify-center gap-2.5 rounded-full bg-lime px-8 text-base font-semibold text-ink shadow-[0_0_0_0_rgba(199,255,53,0)] transition-all duration-200 ease-out will-change-transform hover:scale-[1.02] hover:brightness-110 hover:shadow-[0_0_32px_4px_rgba(199,255,53,0.45)] active:scale-[0.99] disabled:pointer-events-none disabled:opacity-60 sm:w-auto md:h-16 md:px-10 md:text-lg"
                 >
-                  {state === "loading" ? "Sending..." : "Find my affiliates"}
+                  {state === "loading" ? "Sending..." : "Find my partners"}
                   {state !== "loading" && (
                     <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
                   )}

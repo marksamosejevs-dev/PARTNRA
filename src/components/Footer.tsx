@@ -32,7 +32,7 @@ export function Footer() {
           <div>
             <LogoChip />
             <p className="mt-5 max-w-xs text-sm leading-relaxed text-paper/45">
-              AI affiliate recruitment for modern commerce.
+              AI partner discovery for modern commerce.
             </p>
             <p className="font-mono-label mt-4 text-xs uppercase tracking-[0.16em] text-paper/30">
               PARTNRA.AI

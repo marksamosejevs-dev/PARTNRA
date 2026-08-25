@@ -5,7 +5,7 @@ import { Container } from "./ui/Container";
 import { SectionLabel } from "./ui/SectionLabel";
 import { Reveal } from "./ui/Reveal";
 
-const SIGNAL_TYPES = ["Creators", "Promo codes", "Reviews", "Publishers", "Newsletters"];
+const SIGNAL_TYPES = ["Creators", "Promo codes", "Reviews", "Publishers", "Newsletters", "Distributors"];
 
 function Node({ children, delay }: { children: React.ReactNode; delay: number }) {
   return (
@@ -55,14 +55,14 @@ export function CompetitorIntelligence() {
 
         <Reveal delay={0.06}>
           <h2 className="font-display mt-6 max-w-3xl text-[clamp(2rem,5.5vw,4.2rem)] font-medium leading-[1.03] tracking-tight">
-            PARTNRA maps their entire affiliate network.
+            Find who is already promoting brands like yours.
           </h2>
         </Reveal>
 
         <Reveal delay={0.12}>
           <p className="mt-6 max-w-2xl text-lg leading-relaxed text-ink/60 md:text-xl">
-            One competitor in, a mapped-out network of the people and sites already promoting
-            them out — with the evidence behind every result.
+            One competitor in, a mapped-out network of the creators, publishers and partners
+            already promoting them out — with the evidence behind every result.
           </p>
         </Reveal>
 

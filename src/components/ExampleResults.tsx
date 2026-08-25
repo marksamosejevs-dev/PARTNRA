@@ -78,7 +78,7 @@ export function ExampleResults() {
               nutra-labs.co.uk
             </span>
             <span className="font-mono-label text-xs font-semibold uppercase tracking-[0.16em] text-ink/40">
-              Affiliate signals detected — example data
+              Partner signals detected — example data
             </span>
           </div>
         </Reveal>
