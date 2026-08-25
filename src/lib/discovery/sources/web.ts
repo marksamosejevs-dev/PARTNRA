@@ -1,7 +1,17 @@
 import { SourceItem } from "../types";
-import { buildSearchQueries } from "../queries";
+import { buildSearchQueries, buildCategoryQueries } from "../queries";
 
 export class SearchProviderError extends Error {}
+
+async function runSerperQueries(queries: string[], apiKey: string, signal: AbortSignal): Promise<SourceItem[]> {
+  const settled = await Promise.allSettled(queries.map((q) => searchSerper(q, apiKey, signal)));
+
+  if (settled.every((outcome) => outcome.status === "rejected")) {
+    throw new SearchProviderError("All Serper queries failed");
+  }
+
+  return settled.flatMap((outcome) => (outcome.status === "fulfilled" ? outcome.value : []));
+}
 
 async function searchSerper(query: string, apiKey: string, signal: AbortSignal): Promise<SourceItem[]> {
   const res = await fetch("https://google.serper.dev/search", {
@@ -54,11 +64,28 @@ export async function discoverFromWeb(brand: string, domain: string, signal: Abo
   }
 
   const queries = buildSearchQueries(brand, domain);
-  const settled = await Promise.allSettled(queries.map((q) => searchSerper(q, apiKey, signal)));
+  return runSerperQueries(queries, apiKey, signal);
+}
 
-  if (settled.every((outcome) => outcome.status === "rejected")) {
-    throw new SearchProviderError("All Serper queries failed");
+/**
+ * Category-based fallback source — never throws. This runs when
+ * competitor-based discovery is unavailable or too weak on its own, so a
+ * failure here must degrade to no results rather than take down a scan that
+ * would otherwise still complete honestly.
+ */
+export async function discoverCategoryFromWeb(
+  category: string,
+  keywords: string[],
+  signal: AbortSignal
+): Promise<SourceItem[]> {
+  const apiKey = process.env.SERPER_API_KEY;
+  if (!apiKey) return [];
+
+  try {
+    const queries = buildCategoryQueries(category, keywords);
+    return await runSerperQueries(queries, apiKey, signal);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    return [];
   }
-
-  return settled.flatMap((outcome) => (outcome.status === "fulfilled" ? outcome.value : []));
 }

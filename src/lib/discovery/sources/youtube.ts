@@ -1,5 +1,5 @@
 import { SourceItem } from "../types";
-import { buildYoutubeQueries } from "../queries";
+import { buildYoutubeQueries, buildCategoryYoutubeQueries } from "../queries";
 
 interface YoutubeSearchItem {
   id?: { videoId?: string };
@@ -54,6 +54,25 @@ export async function discoverFromYoutube(brand: string, signal: AbortSignal): P
 
   try {
     const queries = buildYoutubeQueries(brand);
+    const batches = await Promise.all(queries.map((q) => searchYoutube(q, apiKey, signal)));
+    return batches.flat();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    return [];
+  }
+}
+
+/** Category-based fallback source — same optional, never-fatal contract as discoverFromYoutube. */
+export async function discoverCategoryFromYoutube(
+  category: string,
+  keywords: string[],
+  signal: AbortSignal
+): Promise<SourceItem[]> {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) return [];
+
+  try {
+    const queries = buildCategoryYoutubeQueries(category, keywords);
     const batches = await Promise.all(queries.map((q) => searchYoutube(q, apiKey, signal)));
     return batches.flat();
   } catch (err) {

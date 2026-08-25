@@ -33,3 +33,36 @@ export function buildOpenAISearchQueries(brand: string): string[] {
     `"${brand}" sponsored review OR ambassador OR newsletter recommendation`,
   ];
 }
+
+/**
+ * Category-based fallback: used when competitor-based discovery is
+ * unavailable or too weak on its own. Searches for people/sites already
+ * commercially engaged with the product category itself -- not a specific
+ * named competitor -- so a weak or absent competitor match never dead-ends
+ * discovery. Kept short for the same cost-control reason as the queries
+ * above; the first keyword (if any) stands in for the most specific thing
+ * this business actually sells.
+ */
+export function buildCategoryQueries(category: string, keywords: string[]): string[] {
+  const topic = keywords[0] || category;
+  return [
+    `"${category}" affiliate program`,
+    `best ${category} recommended by`,
+    `"${topic}" review "discount code"`,
+  ];
+}
+
+/** YouTube Data API search.list calls are quota-metered per query — keep this list short. */
+export function buildCategoryYoutubeQueries(category: string, keywords: string[]): string[] {
+  const topic = keywords[0] || category;
+  return [`best ${category}`, `${topic} review`];
+}
+
+/** Same cost-control reasoning as buildOpenAISearchQueries — kept to 2 queries. */
+export function buildCategoryOpenAISearchQueries(category: string, keywords: string[]): string[] {
+  const topic = keywords[0] || category;
+  return [
+    `"${category}" affiliate program OR partner program OR distributor`,
+    `creators or publishers who regularly review "${topic}"`,
+  ];
+}

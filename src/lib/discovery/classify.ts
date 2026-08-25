@@ -133,6 +133,9 @@ export async function classifyResults(
           ? (item.evidenceType as ClassifiedResult["evidenceType"])
           : null,
         evidence: typeof item.evidence === "string" ? item.evidence : "",
+        // This classifier only ever validates a real relationship with the
+        // named competitor brand itself — the strongest evidence tier.
+        signalStrength: "strong",
         promoCode: typeof item.promoCode === "string" ? item.promoCode : null,
         confidence: typeof item.confidence === "number" ? item.confidence : 0,
         reason: typeof item.reason === "string" ? item.reason : "",
@@ -143,4 +146,161 @@ export async function classifyResults(
 
 export function isClassifierConfigured(): boolean {
   return !!process.env.ANTHROPIC_API_KEY;
+}
+
+const CATEGORY_EVIDENCE_TYPES = ["Category affiliate", "Category review", "Distributor fit"] as const;
+
+/**
+ * Maps evidenceType to signalStrength in code, not the model's own judgement
+ * -- keeps the label the user actually sees consistent and auditable rather
+ * than depending on the LLM picking the same tier every time for the same
+ * evidence type.
+ */
+const CATEGORY_STRENGTH: Record<(typeof CATEGORY_EVIDENCE_TYPES)[number], "medium" | "potential"> = {
+  "Category affiliate": "medium",
+  "Category review": "medium",
+  "Distributor fit": "potential",
+};
+
+function buildCategorySystemPrompt(category: string): string {
+  return `You are a conservative research analyst for Partnra, a partner-discovery tool.
+
+The user's business could not be confidently matched to enough comparable competitor brands with an established partner presence, so you are given public web, YouTube and OpenAI web-search results gathered while searching directly for people, publishers or companies already commercially engaged with the product category "${category}" -- not tied to any specific named competitor.
+
+For EACH result, decide:
+1. Is this genuinely about the category "${category}" (not an unrelated topic that just shares a keyword)?
+2. What kind of real commercial engagement does it show, if any:
+   - "Category affiliate": an active affiliate/referral/sponsorship arrangement for products in this category (a promo code, tracked link, disclosed partnership) -- just not tied to one specific competitor brand.
+   - "Category review": substantive, dedicated review/comparison/roundup content specifically about this product category, with real purchase or recommendation intent (not a passing mention).
+   - "Distributor fit": a real retailer, distributor or reseller whose actual, visible catalogue or business already carries comparable products -- evidenced by an actual catalogue/product listing page, never guessed from a generic "About us" page.
+3. Who is the creator, publisher, or company?
+4. What exactly is the evidence, in one sentence, closely paraphrasing what you saw in the title/snippet?
+5. How strong is that evidence, as a confidence 0-100 within this category strategy (these numbers are NOT comparable to a direct-competitor match -- they only rank within this batch):
+   - 80-100: explicit, clearly commercial engagement with the category (a working affiliate mechanism, or a dedicated, substantial review with clear intent).
+   - 60-79: genuine, real coverage or catalogue fit, but the commercial relationship or intent is less explicit.
+   - Below 60: not enough real evidence -- mark validCandidate: false.
+
+Rules:
+- NEVER infer any of the three evidence types from a single generic brand/category mention, a news article, a forum comment, or an unrelated coupon-aggregator page.
+- NEVER claim "Distributor fit" without a real, visible catalogue/product page as evidence -- not speculation about what a company might plausibly sell.
+- Never invent a name, profile URL, or contact detail not visible in the title/snippet -- use null if unknown.
+- Return exactly one classification per input result, referencing its index.`;
+}
+
+const CATEGORY_CLASSIFY_SCHEMA = {
+  type: "object",
+  properties: {
+    classifications: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          index: { type: "integer" },
+          validCandidate: { type: "boolean" },
+          name: { type: ["string", "null"] },
+          type: { type: ["string", "null"], enum: [...CANDIDATE_TYPES, null] },
+          profileUrl: { type: ["string", "null"] },
+          evidenceType: { type: ["string", "null"], enum: [...CATEGORY_EVIDENCE_TYPES, null] },
+          evidence: { type: "string" },
+          confidence: { type: "integer", minimum: 0, maximum: 100 },
+          reason: { type: "string" },
+        },
+        required: ["index", "validCandidate", "evidence", "confidence", "reason"],
+      },
+    },
+  },
+  required: ["classifications"],
+};
+
+/**
+ * Fallback classifier for Strategy B/C/D (category/product/commercial-fit
+ * discovery) -- used whenever competitor-based discovery is unavailable or
+ * too weak on its own. Evidence bar is real but strategy-relative: it never
+ * claims a competitor relationship that doesn't exist, only genuine category-
+ * level commercial engagement, tagged with the honest, weaker signalStrength
+ * this deserves (never "strong").
+ */
+export async function classifyCategoryResults(
+  items: SourceItem[],
+  category: string,
+  signal: AbortSignal
+): Promise<ClassifiedResult[]> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new ClassifierError("ANTHROPIC_API_KEY is not configured");
+  }
+
+  const model = process.env.LLM_MODEL || "claude-haiku-4-5-20251001";
+
+  const numbered = items
+    .map((r, i) => `[${i}] PLATFORM: ${r.platform}\nTITLE: ${r.title}\nURL: ${r.url}\nSNIPPET: ${r.snippet}`)
+    .join("\n\n");
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 4096,
+      system: buildCategorySystemPrompt(category),
+      messages: [
+        { role: "user", content: `Classify these ${items.length} results:\n\n${numbered}` },
+      ],
+      tools: [
+        {
+          name: TOOL_NAME,
+          description: "Report the classification of each result.",
+          input_schema: CATEGORY_CLASSIFY_SCHEMA,
+        },
+      ],
+      tool_choice: { type: "tool", name: TOOL_NAME },
+    }),
+    signal,
+  });
+
+  if (!res.ok) {
+    throw new ClassifierError(`LLM category classifier returned ${res.status}`);
+  }
+
+  const data = (await res.json()) as { content?: Array<{ type: string; input?: unknown }> };
+  const toolUse = data.content?.find((block) => block.type === "tool_use");
+  const parsed = toolUse?.input as { classifications?: unknown[] } | undefined;
+
+  if (!parsed?.classifications || !Array.isArray(parsed.classifications)) {
+    throw new ClassifierError("LLM category classifier returned an unexpected shape");
+  }
+
+  return parsed.classifications
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item): ClassifiedResult | null => {
+      const index = typeof item.index === "number" ? item.index : -1;
+      const source = items[index];
+      const evidenceType = (CATEGORY_EVIDENCE_TYPES as readonly string[]).includes(item.evidenceType as string)
+        ? (item.evidenceType as (typeof CATEGORY_EVIDENCE_TYPES)[number])
+        : null;
+      if (!evidenceType) return null; // no basis to assign a signalStrength — drop rather than guess
+
+      return {
+        validCandidate: item.validCandidate === true,
+        name: typeof item.name === "string" ? item.name : null,
+        type: (CANDIDATE_TYPES as readonly string[]).includes(item.type as string)
+          ? (item.type as ClassifiedResult["type"])
+          : null,
+        platform: source?.platform ?? "Web",
+        profileUrl:
+          source?.profileUrl ?? (typeof item.profileUrl === "string" ? item.profileUrl : null),
+        sourceUrl: source?.url ?? "",
+        evidenceType,
+        evidence: typeof item.evidence === "string" ? item.evidence : "",
+        signalStrength: CATEGORY_STRENGTH[evidenceType],
+        promoCode: null,
+        confidence: typeof item.confidence === "number" ? item.confidence : 0,
+        reason: typeof item.reason === "string" ? item.reason : "",
+      };
+    })
+    .filter((item): item is ClassifiedResult => item !== null && !!item.sourceUrl);
 }

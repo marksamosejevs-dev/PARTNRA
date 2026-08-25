@@ -4,13 +4,28 @@ export type EvidenceType =
   | "Referral"
   | "Review"
   | "Ambassador"
-  | "Partner";
+  | "Partner"
+  | "Category affiliate"
+  | "Category review"
+  | "Distributor fit";
 
 export type CandidateType = "Creator" | "Publisher" | "Reviewer" | "Site";
 
 export type SourceName = "Web" | "OpenAI" | "YouTube" | "Instagram" | "TikTok";
 
 export type ContactStatus = "found" | "not_found" | "not_attempted";
+
+/**
+ * How this evidence was found, not how confident the classifier is in the
+ * text it read. "strong" = an actual relationship with a direct competitor
+ * (Strategy A). "medium" = real, active commercial engagement with the
+ * user's product category, but not tied to a named competitor (Strategy
+ * B/C). "potential" = a plausible commercial fit (e.g. a distributor/
+ * retailer whose real catalogue matches) with no evidence of an existing
+ * promotional relationship yet (Strategy D). Never inflate one tier into
+ * another — the label is what's shown to the user, so it has to stay honest.
+ */
+export type SignalStrength = "strong" | "medium" | "potential";
 
 export interface Candidate {
   name: string | null;
@@ -24,6 +39,7 @@ export interface Candidate {
   sourceCount: number;
   evidenceType: EvidenceType | null;
   evidence: string;
+  signalStrength: SignalStrength;
   promoCode: string | null;
   contact: string | null;
   contactStatus: ContactStatus;
@@ -61,8 +77,19 @@ export interface DiscoverResponse {
   candidates: Candidate[];
   /** Product category Partnra identified for the submitted business, if determinable. */
   businessCategory: string | null;
+  /** Primary market/geography Partnra identified, if determinable from the homepage. */
+  businessMarket: string | null;
+  /** Short product/keyword phrases Partnra identified the business as selling. */
+  businessKeywords: string[];
   /** Real, resolved comparable-brand domains Partnra investigated on the user's behalf. */
   competitorsAnalyzed: string[];
+  /**
+   * Which discovery strategies actually ran and contributed evidence.
+   * "competitor" = comparable-brand relationships. "category" = direct
+   * category/product/market signals, used whenever competitor-based
+   * discovery was unavailable or too weak on its own.
+   */
+  discoveryStrategiesUsed: Array<"competitor" | "category">;
 }
 
 export interface DiscoverErrorResponse {

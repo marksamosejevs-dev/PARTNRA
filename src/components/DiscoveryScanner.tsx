@@ -119,7 +119,17 @@ export function DiscoveryScanner() {
 
   const shown: Candidate[] = result?.candidates.slice(0, 3) ?? [];
   const moreCount = result ? Math.max(result.totalFound - shown.length, 0) : 0;
-  const strongCount = result?.candidates.filter((c) => c.confidence >= 85).length ?? 0;
+  const strongCount = result?.candidates.filter((c) => c.signalStrength === "strong").length ?? 0;
+
+  const businessSummary =
+    result && (result.businessCategory || result.businessMarket || result.businessKeywords.length > 0) ? (
+      <p className="font-mono-label mb-3 text-[11px] uppercase tracking-[0.1em] text-ink/35">
+        {result.businessCategory ? `Category: ${result.businessCategory}` : "Category: unknown"}
+        {result.businessMarket ? ` · Market: ${result.businessMarket}` : ""}
+        {result.businessKeywords.length > 0 ? ` · Sells: ${result.businessKeywords.join(", ")}` : ""}
+        {result.competitorsAnalyzed.length > 0 ? ` · compared against ${result.competitorsAnalyzed.join(", ")}` : ""}
+      </p>
+    ) : null;
 
   return (
     <div className="rounded-3xl border border-ink/10 bg-paper/80 p-5 md:p-8">
@@ -178,12 +188,13 @@ export function DiscoveryScanner() {
 
       {phase === "empty" && (
         <div className="mt-6 rounded-2xl border border-ink/10 bg-surface/40 p-6 text-center">
+          {businessSummary && <div className="mb-3 text-left">{businessSummary}</div>}
           <p className="font-display text-xl font-medium tracking-tight text-ink">
-            No strong partner signals found yet.
+            We couldn&rsquo;t find enough high-confidence partners yet.
           </p>
           <p className="mt-2 text-sm text-ink/55">
-            We couldn&rsquo;t confidently match this to comparable brands with an established
-            partner presence. Try a different website, or double-check the URL.
+            We analysed your business, but there wasn&rsquo;t enough reliable public evidence to
+            recommend partners confidently yet. Try another website, or double-check the URL.
           </p>
           <button
             type="button"
@@ -198,14 +209,7 @@ export function DiscoveryScanner() {
 
       {phase === "results" && result && (
         <div className="mt-6">
-          {(result.businessCategory || result.competitorsAnalyzed.length > 0) && (
-            <p className="font-mono-label mb-3 text-[11px] uppercase tracking-[0.1em] text-ink/35">
-              {result.businessCategory ? `Category: ${result.businessCategory}` : "Category: unknown"}
-              {result.competitorsAnalyzed.length > 0
-                ? ` · compared against ${result.competitorsAnalyzed.join(", ")}`
-                : ""}
-            </p>
-          )}
+          {businessSummary}
           <div className="flex flex-wrap items-center gap-3">
             <span className="font-display text-xl font-medium tracking-tight text-ink">
               {shown.length} potential {shown.length === 1 ? "partner" : "partners"} found

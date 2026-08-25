@@ -16,6 +16,7 @@ import {
   BusinessAnalysisError,
 } from "@/lib/discovery/business";
 import { resolveCompetitorDomain, ResolvedCompetitor } from "@/lib/discovery/competitors";
+import { fetchCategoryPool, classifyCategoryPool } from "@/lib/discovery/categoryDiscovery";
 import { raceWithTimeout, withFallback, raceValueWithTimeout, StageTimeoutError } from "@/lib/discovery/timeout";
 import { createScanLogger } from "@/lib/discovery/scanLogger";
 import { DiscoverResponse, SourceItem, ClassifiedResult } from "@/lib/discovery/types";
@@ -62,6 +63,13 @@ const MAX_ENRICHED = 5;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_MAX = 5;
 
+// Competitor-based discovery (Strategy A) is a high-value signal, not a hard
+// prerequisite -- if it identifies no competitors, resolves none to a real
+// domain, or turns up fewer than this many qualifying candidates, category
+// discovery (Strategy B/C/D) runs too so a weak or absent competitor match
+// never dead-ends the scan on its own.
+const MIN_STRATEGY_A_RESULTS = 3;
+
 // Best-effort only: this Map lives in a single serverless instance's memory,
 // so it resets on cold start and doesn't share state across instances. Good
 // enough to blunt casual button-mashing, not a real abuse defense.
@@ -100,9 +108,10 @@ function mockModeEnabled(): boolean {
 function emptyResponse(
   brand: string,
   domain: string,
-  businessCategory: string | null,
+  profile: { category: string | null; market: string | null; keywords: string[] },
   competitorsAnalyzed: string[],
-  queriesRun: number
+  queriesRun: number,
+  discoveryStrategiesUsed: Array<"competitor" | "category">
 ): DiscoverResponse {
   return {
     mock: false,
@@ -111,8 +120,11 @@ function emptyResponse(
     queriesRun,
     totalFound: 0,
     candidates: [],
-    businessCategory,
+    businessCategory: profile.category,
+    businessMarket: profile.market,
+    businessKeywords: profile.keywords,
     competitorsAnalyzed,
+    discoveryStrategiesUsed,
   };
 }
 
@@ -242,7 +254,10 @@ export async function POST(request: NextRequest) {
       totalFound: candidates.length,
       candidates: candidates.slice(0, MAX_RESULTS_RETURNED),
       businessCategory: "Sports nutrition supplements",
+      businessMarket: "United States",
+      businessKeywords: ["protein powder", "electrolyte mix"],
       competitorsAnalyzed: ["examplecompetitor.com"],
+      discoveryStrategiesUsed: ["competitor"],
     };
     return NextResponse.json(response);
   }
@@ -292,74 +307,125 @@ export async function POST(request: NextRequest) {
       suggestedCompetitors: profile.competitorNames.length,
     });
 
-    if (profile.competitorNames.length === 0) {
-      log.mark("response_sent", { outcome: "no_competitors_identified" });
-      return NextResponse.json(emptyResponse(brand, domain, profile.category, [], 0));
-    }
+    // Category/product-signal search is kicked off now, concurrently with
+    // Strategy A below -- it doesn't depend on which competitors resolve,
+    // and Strategy A's own resolve+discover+classify stages already take
+    // longer than this in the typical case. Whether it's actually needed
+    // is decided only after Strategy A finishes; if not, the fetched pool
+    // is simply discarded, so this never adds latency on the common path.
+    const categoryPoolPromise = fetchCategoryPool(profile, domain, SOURCE_TIMEOUT_MS, log);
 
-    // Stage 2: resolve each suggested brand name to a real, live domain —
-    // never trust the model's name alone. Resolution failures just drop
-    // that candidate competitor rather than fabricating a domain.
-    log.mark("competitor_resolution_start", { candidates: profile.competitorNames.length });
-    const resolvedOrNull = await Promise.all(
-      profile.competitorNames.slice(0, MAX_COMPETITORS).map((name) =>
-        withFallback(
-          (signal) => resolveCompetitorDomain(name, signal),
-          COMPETITOR_RESOLVE_TIMEOUT_MS,
-          `resolve competitor "${name}"`,
-          null
+    // Strategy A: competitor-based discovery -- a high-value signal, not a
+    // hard prerequisite. Resolution failures just drop that candidate
+    // competitor rather than fabricating a domain; a resolved competitor's
+    // own discovery pipeline failing outright doesn't sink the others.
+    let competitors: ResolvedCompetitor[] = [];
+    const strategyAClassified: ClassifiedResult[] = [];
+    let strategyAQueriesRun = 0;
+    let strategyAInfraFailed = false;
+
+    if (profile.competitorNames.length > 0) {
+      log.mark("competitor_resolution_start", { candidates: profile.competitorNames.length });
+      const resolvedOrNull = await Promise.all(
+        profile.competitorNames.slice(0, MAX_COMPETITORS).map((name) =>
+          withFallback(
+            (signal) => resolveCompetitorDomain(name, signal),
+            COMPETITOR_RESOLVE_TIMEOUT_MS,
+            `resolve competitor "${name}"`,
+            null
+          )
         )
-      )
-    );
-    const competitors = resolvedOrNull.filter((c): c is ResolvedCompetitor => c !== null);
-    log.mark("competitor_resolution_end", { resolved: competitors.map((c) => c.domain) });
+      );
+      competitors = resolvedOrNull.filter((c): c is ResolvedCompetitor => c !== null);
+      log.mark("competitor_resolution_end", { resolved: competitors.map((c) => c.domain) });
 
-    if (competitors.length === 0) {
-      log.mark("response_sent", { outcome: "no_competitors_resolved" });
-      return NextResponse.json(emptyResponse(brand, domain, profile.category, [], 0));
-    }
+      if (competitors.length > 0) {
+        const perCompetitor = await Promise.allSettled(
+          competitors.map((c) => discoverForCompetitor(c, controller.signal, log))
+        );
 
-    // Stage 3 + 4: for each resolved competitor, discover who already
-    // promotes them and classify the evidence — in parallel across
-    // competitors. One competitor's pipeline failing outright (the required
-    // web source genuinely broken/timed out) doesn't sink the others.
-    const perCompetitor = await Promise.allSettled(
-      competitors.map((c) => discoverForCompetitor(c, controller.signal, log))
-    );
-
-    const allClassified: ClassifiedResult[] = [];
-    let queriesRun = 0;
-    let anyCompetitorSucceeded = false;
-    let sourceFailure: unknown = null;
-
-    for (const outcome of perCompetitor) {
-      if (outcome.status === "fulfilled") {
-        anyCompetitorSucceeded = true;
-        allClassified.push(...outcome.value.classified);
-        queriesRun += outcome.value.itemsSearched;
-      } else {
-        sourceFailure = outcome.reason;
+        let anyCompetitorSucceeded = false;
+        for (const outcome of perCompetitor) {
+          if (outcome.status === "fulfilled") {
+            anyCompetitorSucceeded = true;
+            strategyAClassified.push(...outcome.value.classified);
+            strategyAQueriesRun += outcome.value.itemsSearched;
+          }
+        }
+        strategyAInfraFailed = !anyCompetitorSucceeded;
       }
     }
 
-    if (!anyCompetitorSucceeded) {
-      const err = sourceFailure;
-      log.mark("response_sent", { outcome: "all_competitors_failed" });
-      if (err instanceof StageTimeoutError || err instanceof SearchProviderError) {
-        return errorResponse("We couldn't complete the search right now. Please try again in a moment.", 502);
-      }
-      if (err instanceof ClassifierError) {
-        return errorResponse("We couldn't verify the evidence right now. Please try again in a moment.", 502);
-      }
-      throw err;
+    // Strategy B/C/D: direct category/product/commercial-fit discovery.
+    // Classification runs whenever Strategy A identified no competitors,
+    // resolved none to a real domain, or turned up too few qualifying
+    // candidates on its own -- the absence or weakness of a competitor
+    // match must never be a single point of failure for the whole scan.
+    const strategyAQualifying = strategyAClassified.filter((c) => c.validCandidate).length;
+    const needsCategoryFallback = strategyAQualifying < MIN_STRATEGY_A_RESULTS;
+
+    let strategyBClassified: ClassifiedResult[] = [];
+    let strategyBQueriesRun = 0;
+    let strategyBAttempted = false;
+    let strategyBInfraFailed = false;
+
+    const { pool: categoryPool, itemsSearched: categoryItemsSearched } = await categoryPoolPromise;
+    if (needsCategoryFallback && profile.category) {
+      strategyBAttempted = true;
+      strategyBQueriesRun = categoryItemsSearched;
+      // Competitor domains weren't known when the pool was fetched (their
+      // resolution runs concurrently, above) -- filter them out now, so a
+      // resolved competitor's own site never gets classified as a partner.
+      const competitorDomains = new Set(competitors.map((c) => c.domain));
+      const filteredPool = categoryPool.filter((item) => {
+        try {
+          return !competitorDomains.has(new URL(item.url).hostname.replace(/^www\./i, ""));
+        } catch {
+          return false;
+        }
+      });
+      const categoryResult = await classifyCategoryPool(
+        filteredPool,
+        profile.category,
+        controller.signal,
+        CLASSIFY_TIMEOUT_MS,
+        log
+      );
+      strategyBClassified = categoryResult.classified;
+      strategyBInfraFailed = categoryResult.infraFailed;
+    }
+
+    const allClassified = [...strategyAClassified, ...strategyBClassified];
+    const queriesRun = strategyAQueriesRun + strategyBQueriesRun;
+    const discoveryStrategiesUsed: Array<"competitor" | "category"> = [
+      ...(competitors.length > 0 ? (["competitor"] as const) : []),
+      ...(strategyBClassified.length > 0 ? (["category"] as const) : []),
+    ];
+
+    // A hard error is reserved for genuine infrastructure failure across
+    // every strategy actually attempted -- never for legitimately weak or
+    // absent evidence, which still returns an honest (possibly empty)
+    // result below. (One known, pre-existing gap: if the required search
+    // provider itself is fully down, competitor resolution and the
+    // category fallback's web search both already degrade to "found
+    // nothing" rather than surfacing that as an infra failure here -- the
+    // structured logs above capture the real HTTP status/error either way.)
+    const allAttemptsInfraFailed =
+      (competitors.length === 0 || strategyAInfraFailed) &&
+      (!strategyBAttempted || strategyBInfraFailed) &&
+      allClassified.length === 0;
+
+    if (allAttemptsInfraFailed) {
+      log.mark("response_sent", { outcome: "all_strategies_failed" });
+      return errorResponse("We couldn't complete the search right now. Please try again in a moment.", 502);
     }
 
     const deduped = dedupeCandidates(allClassified);
 
     if (deduped.length === 0) {
-      log.mark("response_sent", { outcome: "no_candidates_after_dedupe" });
+      log.mark("response_sent", { outcome: "no_candidates_found" });
       return NextResponse.json(
-        emptyResponse(brand, domain, profile.category, competitors.map((c) => c.domain), queriesRun)
+        emptyResponse(brand, domain, profile, competitors.map((c) => c.domain), queriesRun, discoveryStrategiesUsed)
       );
     }
 
@@ -396,9 +462,16 @@ export async function POST(request: NextRequest) {
       totalFound: deduped.length,
       candidates: enriched.slice(0, MAX_RESULTS_RETURNED),
       businessCategory: profile.category,
+      businessMarket: profile.market,
+      businessKeywords: profile.keywords,
       competitorsAnalyzed: competitors.map((c) => c.domain),
+      discoveryStrategiesUsed,
     };
-    log.mark("response_sent", { outcome: "success", totalFound: deduped.length });
+    log.mark("response_sent", {
+      outcome: "success",
+      totalFound: deduped.length,
+      strategiesUsed: discoveryStrategiesUsed,
+    });
     return NextResponse.json(response);
   } catch (err) {
     log.fail("unhandled", err, { required: true });

@@ -1,5 +1,5 @@
 import { SourceItem } from "../types";
-import { buildOpenAISearchQueries } from "../queries";
+import { buildOpenAISearchQueries, buildCategoryOpenAISearchQueries } from "../queries";
 
 export class OpenAIProviderError extends Error {}
 
@@ -91,6 +91,25 @@ export async function discoverFromOpenAI(brand: string, signal: AbortSignal): Pr
 
   try {
     const queries = buildOpenAISearchQueries(brand);
+    const batches = await Promise.all(queries.map((q) => searchOpenAI(q, apiKey, signal)));
+    return batches.flat();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    return [];
+  }
+}
+
+/** Category-based fallback source — same optional, never-fatal contract as discoverFromOpenAI. */
+export async function discoverCategoryFromOpenAI(
+  category: string,
+  keywords: string[],
+  signal: AbortSignal
+): Promise<SourceItem[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return [];
+
+  try {
+    const queries = buildCategoryOpenAISearchQueries(category, keywords);
     const batches = await Promise.all(queries.map((q) => searchOpenAI(q, apiKey, signal)));
     return batches.flat();
   } catch (err) {

@@ -4,12 +4,29 @@ import { useState } from "react";
 import clsx from "clsx";
 import { Arrow } from "./Arrow";
 import { CountUp } from "./CountUp";
-import type { Candidate } from "@/lib/discovery/types";
+import type { Candidate, SignalStrength } from "@/lib/discovery/types";
 
 const pillBase =
   "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-all duration-200";
 const pillIdle = "border border-ink/15 text-ink hover:border-ink/30";
 const pillActive = "bg-lime text-ink shadow-[0_0_20px_2px_rgba(199,255,53,0.4)]";
+
+/**
+ * How this evidence was found, shown plainly so a category-level signal is
+ * never mistaken for a confirmed competitor relationship. See
+ * `SignalStrength` in lib/discovery/types.ts for what each tier means.
+ */
+const SIGNAL_LABEL: Record<SignalStrength, string> = {
+  strong: "Strong signal",
+  medium: "Medium signal",
+  potential: "Potential fit",
+};
+
+const SIGNAL_BADGE_CLASS: Record<SignalStrength, string> = {
+  strong: "bg-lime/20 text-ink/75",
+  medium: "bg-ink/10 text-ink/60",
+  potential: "border border-ink/15 text-ink/50",
+};
 
 /**
  * `demo` marks example/placeholder candidates (the static ExampleResults
@@ -48,13 +65,20 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
         </div>
       </div>
 
-      {candidate.evidenceType && (
-        <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-lime/20 px-3 py-1">
-          <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/75">
-            {candidate.evidenceType}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className={clsx("inline-flex items-center gap-2 rounded-full px-3 py-1", SIGNAL_BADGE_CLASS[candidate.signalStrength])}>
+          <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em]">
+            {SIGNAL_LABEL[candidate.signalStrength]}
           </span>
         </div>
-      )}
+        {candidate.evidenceType && (
+          <div className="inline-flex items-center gap-2 rounded-full bg-ink/5 px-3 py-1">
+            <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/60">
+              {candidate.evidenceType}
+            </span>
+          </div>
+        )}
+      </div>
 
       <div className="mt-4">
         <div className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/40">
