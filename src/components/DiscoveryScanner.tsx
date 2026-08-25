@@ -123,6 +123,15 @@ export function DiscoveryScanner() {
 
   return (
     <div className="rounded-3xl border border-ink/10 bg-paper/80 p-5 md:p-8">
+      <div className="mb-4">
+        <p className="font-display text-lg font-medium tracking-tight text-ink md:text-xl">
+          Tell PARTNRA what you sell
+        </p>
+        <p className="mt-1 text-sm text-ink/50 md:text-base">
+          Enter your website. PARTNRA will understand your business and find the people
+          and companies that can help sell it.
+        </p>
+      </div>
       <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3 sm:flex-row">
         <input
           type="text"
