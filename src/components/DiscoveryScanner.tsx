@@ -125,7 +125,12 @@ export function DiscoveryScanner() {
   // instead of an artificial display truncation.
   const shown: Candidate[] = result?.candidates ?? [];
   const moreCount = result ? Math.max(result.totalFound - shown.length, 0) : 0;
-  const strongCount = result?.candidates.filter((c) => c.signalStrength === "strong").length ?? 0;
+  const isPreviewFallback = result?.previewFallback === true;
+  // A preview-fallback result must never imply verification -- no "strong
+  // match" badge, whatever the underlying candidate's own signalStrength.
+  const strongCount = isPreviewFallback
+    ? 0
+    : result?.candidates.filter((c) => c.signalStrength === "strong").length ?? 0;
 
   const businessSummary =
     result && (result.businessCategory || result.businessMarket || result.businessKeywords.length > 0) ? (
@@ -218,8 +223,15 @@ export function DiscoveryScanner() {
           {businessSummary}
           <div className="flex flex-wrap items-center gap-3">
             <span className="font-display text-xl font-medium tracking-tight text-ink">
-              {shown.length} potential {shown.length === 1 ? "partner" : "partners"} found
+              {isPreviewFallback
+                ? "1 potential fit found"
+                : `${shown.length} potential ${shown.length === 1 ? "partner" : "partners"} found`}
             </span>
+            {isPreviewFallback && (
+              <span className="font-mono-label rounded-full border border-ink/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/50">
+                Early preview · evidence limited
+              </span>
+            )}
             {strongCount > 0 && (
               <span className="font-mono-label rounded-full bg-lime/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/70">
                 {strongCount} strong match{strongCount === 1 ? "" : "es"}
@@ -234,7 +246,12 @@ export function DiscoveryScanner() {
 
           <div className="mt-5 flex flex-col gap-4">
             {shown.map((candidate, i) => (
-              <EvidenceCard key={`${candidate.sourceUrl}-${i}`} candidate={candidate} demo={result.mock} />
+              <EvidenceCard
+                key={`${candidate.sourceUrl}-${i}`}
+                candidate={candidate}
+                demo={result.mock}
+                preview={isPreviewFallback}
+              />
             ))}
           </div>
 

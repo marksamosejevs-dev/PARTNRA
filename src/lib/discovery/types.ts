@@ -237,6 +237,14 @@ export interface DiscoverResponse {
   queriesRun: number;
   totalFound: number;
   candidates: Candidate[];
+  /**
+   * True when zero candidates passed the normal Quick Scan quality gate
+   * and `candidates` instead contains exactly ONE carefully-selected
+   * preview from the weak pool (see qualification.ts's
+   * selectPreviewFallbackCandidate) -- shown honestly as "Potential fit /
+   * Evidence: Limited", never dressed up as a verified result.
+   */
+  previewFallback?: boolean;
   /** Product category Partnra identified for the submitted business, if determinable. */
   businessCategory: string | null;
   /** Primary market/geography Partnra identified, if determinable from the homepage. */

@@ -40,7 +40,23 @@ const EVIDENCE_CONFIDENCE_LABEL: Record<Candidate["evidenceConfidence"], string>
  * use the placeholder contact, they just give a brief acid-highlight
  * response so the UI still feels alive without pretending the lead is real.
  */
-export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate; demo?: boolean }) {
+/**
+ * `preview` marks the single preview-fallback candidate (see
+ * qualification.ts's selectPreviewFallbackCandidate): the badge and
+ * evidence label are pinned to "Potential fit" / "Evidence: Limited"
+ * regardless of the candidate's own signalStrength, so a preview never
+ * implies verification it doesn't have. The Fit number itself is shown
+ * unchanged -- honest, not inflated.
+ */
+export function EvidenceCard({
+  candidate,
+  demo = false,
+  preview = false,
+}: {
+  candidate: Candidate;
+  demo?: boolean;
+  preview?: boolean;
+}) {
   const [added, setAdded] = useState(false);
   const [evidenceRevealed, setEvidenceRevealed] = useState(false);
   const [contactRevealed, setContactRevealed] = useState(false);
@@ -72,9 +88,14 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <div className={clsx("inline-flex items-center gap-2 rounded-full px-3 py-1", SIGNAL_BADGE_CLASS[candidate.signalStrength])}>
+        <div
+          className={clsx(
+            "inline-flex items-center gap-2 rounded-full px-3 py-1",
+            preview ? SIGNAL_BADGE_CLASS.potential : SIGNAL_BADGE_CLASS[candidate.signalStrength]
+          )}
+        >
           <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em]">
-            {SIGNAL_LABEL[candidate.signalStrength]}
+            {preview ? "Potential fit" : SIGNAL_LABEL[candidate.signalStrength]}
           </span>
         </div>
         {candidate.evidenceType && (
@@ -86,7 +107,7 @@ export function EvidenceCard({ candidate, demo = false }: { candidate: Candidate
         )}
         <div className="inline-flex items-center gap-2 rounded-full border border-ink/10 px-3 py-1">
           <span className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/50">
-            {EVIDENCE_CONFIDENCE_LABEL[candidate.evidenceConfidence]}
+            {preview ? "Evidence: Limited" : EVIDENCE_CONFIDENCE_LABEL[candidate.evidenceConfidence]}
           </span>
         </div>
         {candidate.similarEvidenceNetwork && (

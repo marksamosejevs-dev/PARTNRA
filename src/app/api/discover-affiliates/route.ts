@@ -33,7 +33,7 @@ import { fetchCategoryPool, classifyCategoryPool, StrategyFunnel } from "@/lib/d
 import { raceWithTimeout, withFallback, raceValueWithTimeout, StageTimeoutError } from "@/lib/discovery/timeout";
 import { createScanLogger } from "@/lib/discovery/scanLogger";
 import { DiscoverResponse, SourceItem, ClassifiedResult } from "@/lib/discovery/types";
-import { qualifyOpportunity, QualityTier } from "@/lib/discovery/qualification";
+import { qualifyOpportunity, selectPreviewFallbackCandidate, QualityTier } from "@/lib/discovery/qualification";
 
 function buildBusinessContext(profile: BusinessProfile): BusinessContext {
   return {
@@ -688,14 +688,39 @@ export async function POST(request: NextRequest) {
       totalPotentialPartnersBeforeSlice: potentialPartners.length,
     });
 
+    // PREVIEW FALLBACK -- only when NOTHING passed the normal quality gate.
+    // The gate itself is not weakened: everything it excluded as noise
+    // (evidence sources, competitor infrastructure, comparable businesses,
+    // institutional sources, reverse-direction evidence) stays excluded;
+    // at most ONE genuinely plausible, recruitable weak-pool candidate is
+    // shown as an honest "Potential fit / Evidence: Limited" preview.
+    // Fully logged either way so the selection (or the reason the empty
+    // state remained) is auditable per scan without guessing.
+    let quickScanCandidates = potentialPartners;
+    let previewFallbackUsed = false;
     if (potentialPartners.length === 0) {
+      const fallback = selectPreviewFallbackCandidate(qualifications, businessContext.market);
+      log.mark("preview_fallback", {
+        normalQualifiedCount: 0,
+        weakOrRejectedCount: qualifications.length,
+        considered: fallback.considered,
+        selected: fallback.candidate?.name ?? null,
+        reason: fallback.reason,
+      });
+      if (fallback.candidate) {
+        previewFallbackUsed = true;
+        quickScanCandidates = [fallback.candidate];
+      }
+    }
+
+    if (quickScanCandidates.length === 0) {
       log.mark("response_sent", { outcome: "no_candidates_found" });
       return NextResponse.json(
         emptyResponse(brand, domain, profile, competitors.map((c) => c.domain), queriesRun, discoveryStrategiesUsed)
       );
     }
 
-    const shortlist = potentialPartners.slice(0, MAX_ENRICHED);
+    const shortlist = quickScanCandidates.slice(0, MAX_ENRICHED);
 
     // Enrichment runs only on the already-verified shortlist, after dedupe —
     // never spend a Hunter credit on a weak or duplicate candidate. Each
@@ -725,8 +750,9 @@ export async function POST(request: NextRequest) {
       brand,
       domain,
       queriesRun,
-      totalFound: potentialPartners.length,
+      totalFound: quickScanCandidates.length,
       candidates: enriched.slice(0, MAX_RESULTS_RETURNED),
+      previewFallback: previewFallbackUsed,
       businessCategory: profile.category,
       businessMarket: profile.market,
       businessKeywords: profile.keywords,
@@ -734,8 +760,8 @@ export async function POST(request: NextRequest) {
       discoveryStrategiesUsed,
     };
     log.mark("response_sent", {
-      outcome: "success",
-      totalFound: potentialPartners.length,
+      outcome: previewFallbackUsed ? "preview_fallback" : "success",
+      totalFound: quickScanCandidates.length,
       strategiesUsed: discoveryStrategiesUsed,
     });
     return NextResponse.json(response);

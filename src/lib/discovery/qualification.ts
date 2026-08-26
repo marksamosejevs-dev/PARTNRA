@@ -1,4 +1,6 @@
-import { Candidate, NON_PARTNER_TYPES } from "./types";
+import { Candidate, NON_PARTNER_TYPES, RelationshipDirection } from "./types";
+import { assessMarketFit } from "./entity";
+import { NO_SNIPPET_PLACEHOLDER } from "./classify";
 
 /**
  * ONE canonical qualification step every candidate passes through right
@@ -130,5 +132,139 @@ export function qualifyOpportunity(candidate: Candidate): Qualification {
         ? "Below the Quick Scan quality bar (combined Fit and Evidence Confidence) -- kept internally, not shown as a card."
         : null,
     qualityTier: tier,
+  };
+}
+
+// A candidate whose evidence points the WRONG way (it recruits its own
+// affiliates, documents someone else's program, or is just another
+// supplier of the same thing) is never an acceptable preview, however
+// plausible the rest of it looks -- the preview must be something the
+// user could actually pursue.
+const PREVIEW_INELIGIBLE_DIRECTIONS = new Set<RelationshipDirection>([
+  "operates_affiliate_program",
+  "recruits_affiliates",
+  "publishes_about",
+  "supplies_product",
+]);
+
+const PREVIEW_CHANNEL_FIT_DIRECTIONS = new Set<RelationshipDirection>([
+  "accepts_referrals_from",
+  "refers_clients_to",
+  "distributes_brand",
+  "buys_product",
+]);
+
+/**
+ * The minimum combined preview score a fallback must reach -- a floor
+ * against surfacing genuinely junk candidates just because nothing better
+ * exists. Calibrated so a real, semantically-relevant creator/publisher
+ * with thin evidence (mid-40s Fit, no bonuses) can still preview, while a
+ * generic unverified keyword hit (high-20s/30s Fit, no bonuses) cannot.
+ * Tunable from the per-scan preview_fallback log without guessing.
+ */
+const PREVIEW_SCORE_FLOOR = 45;
+
+export interface PreviewFallbackDecision {
+  candidate: Candidate | null;
+  /** Why this candidate was selected, or why the empty state remained -- always set, for logging. */
+  reason: string;
+  /** Per-candidate audit of the weak/rejected pool considered, for the preview_fallback log. */
+  considered: Array<{ name: string | null; type: Candidate["type"]; eligible: boolean; reason: string; previewScore: number | null }>;
+}
+
+/**
+ * ONE canonical place deciding the Quick Scan preview fallback -- never
+ * scattered across UI/route logic. Runs ONLY when zero candidates passed
+ * the normal quality gate: picks at most ONE genuinely plausible,
+ * recruitable, correctly-resolved entity from the weak pool as an honest
+ * preview ("Potential fit / Evidence: Limited"), because one high-quality
+ * plausible preview is better than an empty funnel -- but an empty state
+ * is still returned when nothing commercially plausible exists. The
+ * normal gate itself is deliberately NOT weakened by this: everything the
+ * gate excludes for being noise (evidence sources, competitor
+ * infrastructure, comparable businesses, generic platforms, institutional
+ * sources, reverse-direction evidence) stays excluded here too -- only
+ * "real opportunity, thin evidence" candidates are eligible.
+ *
+ * Selection is never raw fitScore alone: an explicit combination of
+ * relationship direction, evidence quality, actionability, market fit and
+ * corroboration ranks eligible candidates, with a floor so a scan whose
+ * whole weak pool is junk still honestly returns nothing.
+ */
+export function selectPreviewFallbackCandidate(
+  pool: Array<{ candidate: Candidate; qualification: Qualification }>,
+  businessMarket: string | null
+): PreviewFallbackDecision {
+  const considered: PreviewFallbackDecision["considered"] = [];
+  let best: { candidate: Candidate; previewScore: number } | null = null;
+
+  for (const { candidate, qualification } of pool) {
+    const audit = (eligible: boolean, reason: string, previewScore: number | null = null) => {
+      considered.push({ name: candidate.name, type: candidate.type, eligible, reason, previewScore });
+    };
+
+    // The normal gate's own non-partner classifications stay excluded --
+    // this fallback never re-admits evidence sources, competitor
+    // infrastructure, comparable businesses, generic platforms or
+    // institutional sources (all of which qualifyOpportunity already
+    // classified away from "potential_partner").
+    if (qualification.finalClassification !== "potential_partner") {
+      audit(false, `Not a potential partner (${qualification.finalClassification}).`);
+      continue;
+    }
+    if (PREVIEW_INELIGIBLE_DIRECTIONS.has(candidate.relationshipDirection)) {
+      audit(false, `Reverse/ineligible relationship direction (${candidate.relationshipDirection}).`);
+      continue;
+    }
+    const evidenceText = candidate.evidence.trim();
+    if (evidenceText === NO_SNIPPET_PLACEHOLDER || evidenceText.length < 20) {
+      audit(false, "No real evidence text behind the candidate.");
+      continue;
+    }
+    const marketFit = assessMarketFit(candidate.evidence, businessMarket);
+    if (marketFit === "mismatch") {
+      audit(false, "Explicit geography mismatch with the business's own market.");
+      continue;
+    }
+
+    // Explicitly NOT raw fitScore alone: fitScore already composites
+    // type/direction/market/evidence-sufficiency, but the preview pick
+    // additionally re-weights the signals that make a thin-evidence lead
+    // worth previewing -- an actionable channel direction, whatever
+    // evidence quality it DOES have, a real application route, and
+    // independent corroboration.
+    const directionBonus = PREVIEW_CHANNEL_FIT_DIRECTIONS.has(candidate.relationshipDirection)
+      ? 15
+      : candidate.relationshipDirection === "promotes_brand"
+        ? 10
+        : 0;
+    const evidenceBonus = candidate.evidenceConfidence === "strong" ? 20 : candidate.evidenceConfidence === "medium" ? 12 : 0;
+    const actionabilityBonus = (candidate.applicationUrl ? 8 : 0) + (candidate.verified ? 6 : 0);
+    const marketBonus = marketFit === "exact" ? 10 : marketFit === "global" ? 5 : marketFit === "adjacent" ? 2 : 0;
+    const corroborationBonus = Math.min((candidate.sourceCount - 1) * 4, 8);
+    const previewScore = candidate.fitScore + directionBonus + evidenceBonus + actionabilityBonus + marketBonus + corroborationBonus;
+
+    if (previewScore < PREVIEW_SCORE_FLOOR) {
+      audit(false, `Combined preview score ${previewScore} below floor ${PREVIEW_SCORE_FLOOR}.`, previewScore);
+      continue;
+    }
+
+    audit(true, "Eligible.", previewScore);
+    if (!best || previewScore > best.previewScore) {
+      best = { candidate, previewScore };
+    }
+  }
+
+  if (!best) {
+    return {
+      candidate: null,
+      reason: "No commercially plausible, recruitable entity with real evidence survived preview eligibility -- empty state remains.",
+      considered,
+    };
+  }
+  return {
+    candidate: best.candidate,
+    reason: `Best combined preview score (${best.previewScore}): direction ${best.candidate.relationshipDirection}, evidence ${best.candidate.evidenceConfidence}, type ${best.candidate.type}.`,
+    considered,
   };
 }
