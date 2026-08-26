@@ -1,5 +1,5 @@
 import { CandidateType, ClassifiedResult, RelationshipDirection, SourceItem } from "./types";
-import { resolveEntity, computeFitScore, evidenceConfidenceLabel, classifyPartnerType, assessMarketFit } from "./entity";
+import { resolveEntity, computeFitScore, evidenceConfidenceLabel, classifyPartnerType, assessGeographicFit } from "./entity";
 import { detectRelationshipDirection, applyRelationshipDirection } from "./relationshipDirection";
 
 export class ClassifierError extends Error {}
@@ -154,11 +154,13 @@ function hasSufficientEvidence(source: SourceItem | undefined): boolean {
   return !!source.snippet && `${source.title} ${source.snippet}`.trim().length >= 20;
 }
 
-/** Bundled so callers adding a new cross-cutting input (this session added `market`) don't need to keep growing a positional parameter list. */
+/** Bundled so callers adding a new cross-cutting input (this session added `market`, then `businessModel`) don't need to keep growing a positional parameter list. */
 export interface CandidateFieldOptions {
   intent?: PartnerTypeIntent;
-  /** The scanning business's own stated market/geography (see BusinessContext.market) -- fed into assessMarketFit, never guessed here. */
+  /** The scanning business's own stated market/geography (see BusinessContext.market) -- fed into assessGeographicFit, never guessed here. */
   market?: string | null;
+  /** The scanning business's own Partner Intent Profile businessModel text (see BusinessContext.businessModel) -- fed into inferGeoStrictness, never guessed here. */
+  businessModel?: string | null;
 }
 
 function buildCandidateFields(
@@ -174,7 +176,7 @@ function buildCandidateFields(
   const relationshipDirection = resolveDirection(source, entity.name, presumedDirection);
   const evidenceSufficient = hasSufficientEvidence(source);
   const evidenceText = source ? `${source.title} ${source.snippet}` : "";
-  const marketFit = assessMarketFit(evidenceText, options?.market ?? null);
+  const geographicFit = assessGeographicFit(evidenceText, options?.market ?? null);
 
   const base = {
     name: entity.name,
@@ -194,7 +196,8 @@ function buildCandidateFields(
       deprioritizedTypes: options?.intent?.deprioritized,
       relationshipDirection,
       hasSufficientEvidence: evidenceSufficient,
-      marketFit,
+      geographicFit,
+      businessModel: options?.businessModel ?? null,
     }),
     // Cross-candidate templated/doorway-network detection can only run once
     // the full pool is assembled -- see dedupe.ts's flagDuplicateEvidenceNetworks,
@@ -298,7 +301,7 @@ export async function classifyResults(
         // competitor" by construction -- the only thing left to check is
         // whether the evidence text ALSO shows an explicit reverse-
         // direction signal (see resolveDirection) that should override it.
-        ...buildCandidateFields(source, signalStrength, verified, "promotes_brand", { intent, market: businessContext.market }),
+        ...buildCandidateFields(source, signalStrength, verified, "promotes_brand", { intent, market: businessContext.market, businessModel: businessContext.businessModel }),
       };
     })
     .filter((item) => item.sourceUrl);
@@ -464,7 +467,7 @@ export async function classifyCategoryResults(
         promoCode: null,
         confidence: typeof item.confidence === "number" ? item.confidence : 0,
         reason: typeof item.reason === "string" ? item.reason : "",
-        ...buildCandidateFields(source, signalStrength, verified, presumedDirection, { intent, market: businessContext.market }),
+        ...buildCandidateFields(source, signalStrength, verified, presumedDirection, { intent, market: businessContext.market, businessModel: businessContext.businessModel }),
       };
     })
     .filter((item): item is ClassifiedResult => item !== null && !!item.sourceUrl);

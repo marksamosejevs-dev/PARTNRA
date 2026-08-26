@@ -1,5 +1,5 @@
 import { Candidate, ClassifiedResult, SignalStrength } from "./types";
-import { computeFitScore, evidenceConfidenceLabel, assessMarketFit } from "./entity";
+import { computeFitScore, evidenceConfidenceLabel, assessGeographicFit } from "./entity";
 import { flagDuplicateEvidenceNetworks } from "./duplicateNetwork";
 import { PartnerTypeIntent, NO_SNIPPET_PLACEHOLDER } from "./classify";
 
@@ -71,7 +71,12 @@ function mergePlatforms(a: string | null, b: string | null): string | null {
  * equally-confident single-source one -- without inflating the confidence
  * number itself.
  */
-export function dedupeCandidates(items: ClassifiedResult[], intent?: PartnerTypeIntent, market: string | null = null): Candidate[] {
+export function dedupeCandidates(
+  items: ClassifiedResult[],
+  intent?: PartnerTypeIntent,
+  market: string | null = null,
+  businessModel: string | null = null
+): Candidate[] {
   const merged: Candidate[] = [];
 
   for (const item of items) {
@@ -154,7 +159,7 @@ export function dedupeCandidates(items: ClassifiedResult[], intent?: PartnerType
     // Re-derived from the FINAL merged evidence string, same reasoning as
     // evidenceLooksSufficient above: a duplicate sighting can add real
     // geography text a single sighting didn't have.
-    const marketFit = assessMarketFit(c.evidence, market);
+    const geographicFit = assessGeographicFit(c.evidence, market);
     return {
       ...c,
       evidenceConfidence: evidenceConfidenceLabel(c.signalStrength, c.verified, sufficientEvidence),
@@ -168,7 +173,8 @@ export function dedupeCandidates(items: ClassifiedResult[], intent?: PartnerType
         deprioritizedTypes: intent?.deprioritized,
         relationshipDirection: c.relationshipDirection,
         hasSufficientEvidence: sufficientEvidence,
-        marketFit,
+        geographicFit,
+        businessModel,
       }),
     };
   });

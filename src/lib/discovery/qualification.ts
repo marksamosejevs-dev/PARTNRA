@@ -1,5 +1,5 @@
 import { Candidate, NON_PARTNER_TYPES, RelationshipDirection } from "./types";
-import { assessMarketFit } from "./entity";
+import { assessGeographicFit, inferGeoStrictness, GEO_FIT_WEIGHTS } from "./entity";
 import { NO_SNIPPET_PLACEHOLDER } from "./classify";
 
 /**
@@ -187,13 +187,18 @@ export interface PreviewFallbackDecision {
  * "real opportunity, thin evidence" candidates are eligible.
  *
  * Selection is never raw fitScore alone: an explicit combination of
- * relationship direction, evidence quality, actionability, market fit and
- * corroboration ranks eligible candidates, with a floor so a scan whose
- * whole weak pool is junk still honestly returns nothing.
+ * relationship direction, evidence quality, actionability, geographic fit
+ * and corroboration ranks eligible candidates, with a floor so a scan
+ * whose whole weak pool is junk still honestly returns nothing. A
+ * candidate whose geography clearly MISMATCHES the business's own market
+ * is never eligible as a preview at all -- a commercially distant entity
+ * should never be the one honest preview shown, however good the rest of
+ * its evidence looks (see assessGeographicFit).
  */
 export function selectPreviewFallbackCandidate(
   pool: Array<{ candidate: Candidate; qualification: Qualification }>,
-  businessMarket: string | null
+  businessMarket: string | null,
+  businessModel: string | null = null
 ): PreviewFallbackDecision {
   const considered: PreviewFallbackDecision["considered"] = [];
   let best: { candidate: Candidate; previewScore: number } | null = null;
@@ -221,18 +226,21 @@ export function selectPreviewFallbackCandidate(
       audit(false, "No real evidence text behind the candidate.");
       continue;
     }
-    const marketFit = assessMarketFit(candidate.evidence, businessMarket);
-    if (marketFit === "mismatch") {
-      audit(false, "Explicit geography mismatch with the business's own market.");
+    const geographicFit = assessGeographicFit(candidate.evidence, businessMarket);
+    if (geographicFit === "mismatch") {
+      audit(false, "Explicit geography mismatch with the business's own market -- never an acceptable preview.");
       continue;
     }
 
     // Explicitly NOT raw fitScore alone: fitScore already composites
-    // type/direction/market/evidence-sufficiency, but the preview pick
+    // type/direction/geography/evidence-sufficiency, but the preview pick
     // additionally re-weights the signals that make a thin-evidence lead
     // worth previewing -- an actionable channel direction, whatever
-    // evidence quality it DOES have, a real application route, and
-    // independent corroboration.
+    // evidence quality it DOES have, a real application route,
+    // independent corroboration, and geographic fit weighted by the same
+    // strictness table Fit itself uses (see GEO_FIT_WEIGHTS) so a foreign
+    // "exports globally" claim never outweighs a candidate that actually
+    // operates in or near the target market.
     const directionBonus = PREVIEW_CHANNEL_FIT_DIRECTIONS.has(candidate.relationshipDirection)
       ? 15
       : candidate.relationshipDirection === "promotes_brand"
@@ -240,9 +248,10 @@ export function selectPreviewFallbackCandidate(
         : 0;
     const evidenceBonus = candidate.evidenceConfidence === "strong" ? 20 : candidate.evidenceConfidence === "medium" ? 12 : 0;
     const actionabilityBonus = (candidate.applicationUrl ? 8 : 0) + (candidate.verified ? 6 : 0);
-    const marketBonus = marketFit === "exact" ? 10 : marketFit === "global" ? 5 : marketFit === "adjacent" ? 2 : 0;
+    const geoStrictness = inferGeoStrictness(businessModel, candidate.type);
+    const geoBonus = GEO_FIT_WEIGHTS[geoStrictness][geographicFit];
     const corroborationBonus = Math.min((candidate.sourceCount - 1) * 4, 8);
-    const previewScore = candidate.fitScore + directionBonus + evidenceBonus + actionabilityBonus + marketBonus + corroborationBonus;
+    const previewScore = candidate.fitScore + directionBonus + evidenceBonus + actionabilityBonus + geoBonus + corroborationBonus;
 
     if (previewScore < PREVIEW_SCORE_FLOOR) {
       audit(false, `Combined preview score ${previewScore} below floor ${PREVIEW_SCORE_FLOOR}.`, previewScore);

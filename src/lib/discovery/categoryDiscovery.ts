@@ -161,7 +161,7 @@ export async function classifyCategoryPool(
 
     const aiRejectedUrls = new Set(aiResult.filter((r) => !r.validCandidate).map((r) => r.sourceUrl));
     const rejectedItems = classifyInput.filter((item) => aiRejectedUrls.has(item.url));
-    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow], { categoryPhrases, intent, market: businessContext.market });
+    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow], { categoryPhrases, intent, market: businessContext.market, businessModel: businessContext.businessModel });
     funnel.rescuedScored = rescued.length;
     funnel.rejectedWeakEvidence = aiRejectedUrls.size + overflow.length - rescued.length;
 
@@ -174,7 +174,7 @@ export async function classifyCategoryPool(
     return { classified, funnel };
   } catch (err) {
     log.fail("category_classification", err);
-    const classified = scoreUnverified(pool, { categoryPhrases, intent, market: businessContext.market });
+    const classified = scoreUnverified(pool, { categoryPhrases, intent, market: businessContext.market, businessModel: businessContext.businessModel });
     funnel.timedOutFallbackScored = classified.length;
     log.mark("category_classification_end", { classified: classified.length, verified: false });
     return { classified, funnel };

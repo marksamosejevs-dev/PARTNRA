@@ -429,62 +429,344 @@ const CHANNEL_FIT_DIRECTIONS = new Set<RelationshipDirection>([
 ]);
 
 /**
- * A lightweight, generic region-alias lookup -- not exhaustive geopolitics,
- * just enough to tell whether a business's own stated market and a
- * candidate's evidence text are talking about the same, an adjacent, or a
- * clearly different geography. Grouped by broad market names rather than
- * every individual country, and deliberately small: the goal is "does this
- * evidence's geography plausibly serve this business's market", not a
- * precise geopolitical classifier.
+ * A generic, non-exhaustive geography gazetteer -- broad commercial regions
+ * (never a specific business/domain) plus enough individual countries to
+ * tell "same country" (exact) apart from "same region, different country"
+ * (regional) apart from "clearly elsewhere" (mismatch). Aliases are matched
+ * as plain substrings against lowercased text padded with a leading/
+ * trailing space, so a short alias like " uk " doesn't match inside an
+ * unrelated word.
  */
-const REGION_ALIASES: Record<string, string[]> = {
-  "united states": ["united states", "u.s.a.", "u.s.", "usa", "america", "american", "stateside"],
-  canada: ["canada", "canadian"],
-  "united kingdom": ["united kingdom", "u.k.", " uk ", "britain", "british", "england", "scotland", "wales"],
-  "european union": ["european union", " eu ", "europe", "european"],
-  australia: ["australia", "australian"],
-  "new zealand": ["new zealand"],
-};
-const GLOBAL_MARKET_SIGNALS = /\b(worldwide|globally|international(?:ly)?|multiple countries|ships internationally)\b/i;
-// UK and EU markets have enough real commercial/trade overlap (freight,
-// import routes, shared regulatory language) to treat evidence from one as
-// an adjacent (not mismatched) market for a business based in the other --
-// still not an exact match, but not a penalty either.
-const ADJACENT_REGION_PAIRS: Array<[string, string]> = [["united kingdom", "european union"]];
+type Region = "uk" | "eu" | "europe_other" | "us" | "canada" | "latam" | "mena" | "apac";
 
-function detectRegions(text: string): Set<string> {
-  const padded = ` ${text.toLowerCase()} `;
-  const found = new Set<string>();
-  for (const [region, aliases] of Object.entries(REGION_ALIASES)) {
-    if (aliases.some((alias) => padded.includes(alias))) found.add(region);
-  }
-  return found;
+interface GeoAlias {
+  country: string;
+  region: Region;
+  alias: string;
 }
 
-export type MarketFit = "exact" | "global" | "adjacent" | "mismatch" | "unknown";
+const GEO_ALIASES: GeoAlias[] = [
+  { country: "uk", region: "uk", alias: "united kingdom" },
+  { country: "uk", region: "uk", alias: "u.k." },
+  { country: "uk", region: "uk", alias: " uk " },
+  { country: "uk", region: "uk", alias: "britain" },
+  { country: "uk", region: "uk", alias: "british" },
+  { country: "uk", region: "uk", alias: "england" },
+  { country: "uk", region: "uk", alias: "scotland" },
+  { country: "uk", region: "uk", alias: "wales" },
+  { country: "eu", region: "eu", alias: "european union" },
+  { country: "eu", region: "eu", alias: " eu " },
+  { country: "eu", region: "eu", alias: "europe" },
+  { country: "eu", region: "eu", alias: "european" },
+  { country: "germany", region: "eu", alias: "germany" },
+  { country: "germany", region: "eu", alias: "german" },
+  { country: "france", region: "eu", alias: "france" },
+  { country: "france", region: "eu", alias: "french" },
+  { country: "poland", region: "eu", alias: "poland" },
+  { country: "poland", region: "eu", alias: "polish" },
+  { country: "netherlands", region: "eu", alias: "netherlands" },
+  { country: "netherlands", region: "eu", alias: "dutch" },
+  { country: "spain", region: "eu", alias: "spain" },
+  { country: "spain", region: "eu", alias: "spanish" },
+  { country: "italy", region: "eu", alias: "italy" },
+  { country: "italy", region: "eu", alias: "italian" },
+  { country: "ireland", region: "eu", alias: "ireland" },
+  { country: "ireland", region: "eu", alias: "irish" },
+  { country: "sweden", region: "eu", alias: "sweden" },
+  { country: "sweden", region: "eu", alias: "swedish" },
+  { country: "denmark", region: "eu", alias: "denmark" },
+  { country: "denmark", region: "eu", alias: "danish" },
+  { country: "latvia", region: "eu", alias: "latvia" },
+  { country: "latvia", region: "eu", alias: "latvian" },
+  { country: "lithuania", region: "eu", alias: "lithuania" },
+  { country: "lithuania", region: "eu", alias: "lithuanian" },
+  { country: "estonia", region: "eu", alias: "estonia" },
+  { country: "estonia", region: "eu", alias: "estonian" },
+  { country: "baltics", region: "eu", alias: "baltics" },
+  { country: "baltics", region: "eu", alias: "baltic states" },
+  { country: "switzerland", region: "europe_other", alias: "switzerland" },
+  { country: "switzerland", region: "europe_other", alias: "swiss" },
+  { country: "norway", region: "europe_other", alias: "norway" },
+  { country: "norway", region: "europe_other", alias: "norwegian" },
+  { country: "us", region: "us", alias: "united states" },
+  { country: "us", region: "us", alias: "u.s.a." },
+  { country: "us", region: "us", alias: "u.s." },
+  { country: "us", region: "us", alias: "usa" },
+  { country: "us", region: "us", alias: "america" },
+  { country: "us", region: "us", alias: "american" },
+  { country: "canada", region: "canada", alias: "canada" },
+  { country: "canada", region: "canada", alias: "canadian" },
+  { country: "australia", region: "apac", alias: "australia" },
+  { country: "australia", region: "apac", alias: "australian" },
+  { country: "newzealand", region: "apac", alias: "new zealand" },
+  { country: "indonesia", region: "apac", alias: "indonesia" },
+  { country: "indonesia", region: "apac", alias: "indonesian" },
+  { country: "vietnam", region: "apac", alias: "vietnam" },
+  { country: "vietnam", region: "apac", alias: "vietnamese" },
+  { country: "china", region: "apac", alias: "china" },
+  { country: "china", region: "apac", alias: "chinese" },
+  { country: "india", region: "apac", alias: "india" },
+  { country: "india", region: "apac", alias: "indian" },
+  { country: "japan", region: "apac", alias: "japan" },
+  { country: "japan", region: "apac", alias: "japanese" },
+  { country: "korea", region: "apac", alias: "korea" },
+  { country: "korea", region: "apac", alias: "korean" },
+  { country: "brazil", region: "latam", alias: "brazil" },
+  { country: "brazil", region: "latam", alias: "brazilian" },
+  { country: "mexico", region: "latam", alias: "mexico" },
+  { country: "mexico", region: "latam", alias: "mexican" },
+  { country: "latam", region: "latam", alias: "latin america" },
+  { country: "uae", region: "mena", alias: "united arab emirates" },
+  { country: "uae", region: "mena", alias: "uae" },
+  { country: "uae", region: "mena", alias: "dubai" },
+  { country: "mena", region: "mena", alias: "middle east" },
+];
+
+// UK/EU/other-Europe have enough real commercial/trade overlap (freight,
+// import routes, shared regulatory language) to treat one as an adjacent
+// (not mismatched) market for a business based in another -- still not an
+// exact or regional match, but not a penalty-grade mismatch either.
+const ADJACENT_REGIONS: Array<[Region, Region]> = [
+  ["uk", "eu"],
+  ["uk", "europe_other"],
+  ["eu", "europe_other"],
+];
+
+function regionsAdjacent(a: Region, b: Region): boolean {
+  return ADJACENT_REGIONS.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+}
+
+interface GeoMentions {
+  countries: Set<string>;
+  regions: Set<Region>;
+}
+
+function emptyGeoMentions(): GeoMentions {
+  return { countries: new Set(), regions: new Set() };
+}
+
+function matchAliasesIn(text: string): GeoMentions {
+  const padded = ` ${text.toLowerCase()} `;
+  const mentions = emptyGeoMentions();
+  for (const { country, region, alias } of GEO_ALIASES) {
+    if (padded.includes(alias)) {
+      mentions.countries.add(country);
+      mentions.regions.add(region);
+    }
+  }
+  return mentions;
+}
+
+// Phrases describing the entity's OWN location/presence -- a real
+// operating signal, not merely reach. Matched with a forward window (the
+// region name normally follows: "based in Germany", "authorized
+// distributor in Poland") clipped at the next clause boundary so a
+// following, unrelated clause's region ("...based in Indonesia, exporting
+// to Europe") is never misread as this entity's own location.
+const OPERATING_SIGNAL_PHRASES = [
+  "based in", "headquartered in", "located in", "operates in", "operating in",
+  "office in", "offices in", "warehouse in", "authorized dealer in",
+  "authorized distributor in", "distributor for", "dealer for",
+];
+// Phrases describing REACH -- exporting/shipping/serving a market -- real
+// evidence the entity can be USEFUL there, but not proof it operates
+// there. Deliberately scored lower than an operating match everywhere this
+// feeds in (see assessGeographicFit/GEO_FIT_WEIGHTS): "we export globally"
+// should never outrank a candidate that actually operates in or near the
+// target market.
+const SERVING_SIGNAL_PHRASES = [
+  "exports to", "export to", "exporting to", "ships to", "shipping to",
+  "delivers to", "delivery to", "distributes to", "sells into", "sells to",
+  "available in", "serves customers in", "serves clients in", "serves", "supplies",
+];
+// "UK-based" / "US audience" -- the region word comes BEFORE the signal
+// word here, so these are captured separately rather than via a forward
+// window.
+const OPERATING_SUFFIX_PATTERN = /\b([a-z]+)-based\b/gi;
+const AUDIENCE_SUFFIX_PATTERN = /\b([a-z]+(?:\s[a-z]+)?)\s+audience\b/gi;
 
 /**
- * "unknown" (never a penalty) whenever either side's geography isn't
- * confidently detectable -- this must never exclude a globally useful
- * entity just because neither the business's own market nor a candidate's
- * evidence text happened to name a region explicitly. Only an explicit,
- * clearly DIFFERENT (and non-adjacent) region on both sides is a real
- * mismatch -- e.g. a business whose stated market is the EU/UK, given
- * evidence that explicitly describes a US-only distribution footprint.
+ * Clips a forward-looking window at whichever comes first: real
+ * punctuation, or the start of an OPPOSITE-type signal phrase. Without the
+ * second check, a punctuation-free run-on clause like "...distributor for
+ * wood pellets is based in Germany and supplies buyers across the EU."
+ * would let the "based in" operating window bleed straight into the
+ * unrelated "supplies ... EU" reach-claim later in the same sentence,
+ * wrongly reading it as this entity's own operating location too.
  */
-export function assessMarketFit(evidenceText: string, businessMarket: string | null): MarketFit {
-  if (!businessMarket) return "unknown";
-  const businessRegions = detectRegions(businessMarket);
-  if (businessRegions.size === 0) return "unknown";
-  if (GLOBAL_MARKET_SIGNALS.test(evidenceText)) return "global";
-  const evidenceRegions = detectRegions(evidenceText);
-  if (evidenceRegions.size === 0) return "unknown";
-  if (Array.from(evidenceRegions).some((r) => businessRegions.has(r))) return "exact";
-  const isAdjacent = ADJACENT_REGION_PAIRS.some(
-    ([a, b]) => (businessRegions.has(a) && evidenceRegions.has(b)) || (businessRegions.has(b) && evidenceRegions.has(a))
+function clauseWindow(rest: string, oppositeSignalPhrases: string[]): string {
+  const punctBoundary = rest.search(/[.,;]/);
+  let boundary = punctBoundary === -1 ? Infinity : punctBoundary;
+  for (const phrase of oppositeSignalPhrases) {
+    const idx = rest.indexOf(phrase);
+    if (idx !== -1 && idx < boundary) boundary = idx;
+  }
+  return rest.slice(0, boundary === Infinity ? 40 : boundary);
+}
+
+function forwardSignalMentions(lowerText: string, phrases: string[], oppositeSignalPhrases: string[]): GeoMentions {
+  const mentions = emptyGeoMentions();
+  for (const phrase of phrases) {
+    let idx = lowerText.indexOf(phrase);
+    while (idx !== -1) {
+      const start = idx + phrase.length;
+      const rest = lowerText.slice(start, start + 80);
+      const window = clauseWindow(rest, oppositeSignalPhrases);
+      const found = matchAliasesIn(window);
+      found.countries.forEach((c) => mentions.countries.add(c));
+      found.regions.forEach((r) => mentions.regions.add(r));
+      idx = lowerText.indexOf(phrase, start);
+    }
+  }
+  return mentions;
+}
+
+function suffixSignalMentions(text: string): GeoMentions {
+  const mentions = emptyGeoMentions();
+  for (const pattern of [OPERATING_SUFFIX_PATTERN, AUDIENCE_SUFFIX_PATTERN]) {
+    const re = new RegExp(pattern.source, pattern.flags);
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(text))) {
+      const found = matchAliasesIn(` ${match[1]} `);
+      found.countries.forEach((c) => mentions.countries.add(c));
+      found.regions.forEach((r) => mentions.regions.add(r));
+    }
+  }
+  return mentions;
+}
+
+function splitGeoMentionsBySignal(text: string): { operating: GeoMentions; serving: GeoMentions } {
+  const lower = text.toLowerCase();
+  const operating = forwardSignalMentions(lower, OPERATING_SIGNAL_PHRASES, SERVING_SIGNAL_PHRASES);
+  const suffixOperating = suffixSignalMentions(text);
+  suffixOperating.countries.forEach((c) => operating.countries.add(c));
+  suffixOperating.regions.forEach((r) => operating.regions.add(r));
+  const serving = forwardSignalMentions(lower, SERVING_SIGNAL_PHRASES, OPERATING_SIGNAL_PHRASES);
+  return { operating, serving };
+}
+
+function compareGeo(mentions: GeoMentions, target: GeoMentions): Exclude<GeographicFit, "global_relevant"> {
+  if (mentions.countries.size === 0 && mentions.regions.size === 0) return "unknown";
+  if (Array.from(mentions.countries).some((c) => target.countries.has(c))) return "exact";
+  if (Array.from(mentions.regions).some((r) => target.regions.has(r))) return "regional";
+  const isAdjacent = Array.from(mentions.regions).some((r) =>
+    Array.from(target.regions).some((tr) => regionsAdjacent(r, tr))
   );
   return isAdjacent ? "adjacent" : "mismatch";
 }
+
+const GLOBAL_CLAIM_SIGNALS = /\b(worldwide|globally|international(?:ly)?|multiple countries|ships internationally)\b/i;
+
+export type GeographicFit = "exact" | "regional" | "global_relevant" | "adjacent" | "mismatch" | "unknown";
+
+/**
+ * Compares a candidate's evidence text against the scanning business's own
+ * stated market -- a real qualification signal, not just a small Fit
+ * nudge (see GEO_FIT_WEIGHTS/computeFitScore and qualification.ts's
+ * preview-eligibility check). Distinguishes the entity's OWN operating
+ * location ("based in Germany", "UK-based", "UK audience") from a mere
+ * reach/export claim ("exports to Europe"): a foreign manufacturer that
+ * only claims to export to the target market is `global_relevant` at
+ * best, never `exact`/`regional` -- it can never be read as though it
+ * actually operates in or near the target market. A bare "worldwide"/
+ * "international" claim with no evidence of actually reaching the SPECIFIC
+ * target market is honestly `unknown`, not a free pass. `unknown` when
+ * neither side's geography is confidently detectable at all -- this is a
+ * real (small) qualification signal here, unlike the old, purely-neutral
+ * market-fit bonus, since an entity with literally no stated geography is
+ * genuinely less verifiable than one with a confirmed adjacent/regional
+ * presence. Deliberately does NOT use the URL/domain TLD as a signal --
+ * that's weak, not proof (a ".com" or ".co.uk" store can serve any
+ * market) -- only real evidence-text language.
+ */
+export function assessGeographicFit(evidenceText: string, businessMarket: string | null): GeographicFit {
+  if (!businessMarket) return "unknown";
+  const target = matchAliasesIn(businessMarket);
+  if (target.countries.size === 0 && target.regions.size === 0) return "unknown";
+
+  const { operating, serving } = splitGeoMentionsBySignal(evidenceText);
+  const operatingFit = compareGeo(operating, target);
+  if (operatingFit === "exact" || operatingFit === "regional") return operatingFit;
+
+  const servingFit = compareGeo(serving, target);
+  const hasGlobalReachSignal = GLOBAL_CLAIM_SIGNALS.test(evidenceText) || serving.countries.size > 0 || serving.regions.size > 0;
+  if (hasGlobalReachSignal && (servingFit === "exact" || servingFit === "regional" || servingFit === "adjacent")) {
+    return "global_relevant";
+  }
+
+  if (operatingFit === "adjacent") return "adjacent";
+  if (operatingFit === "mismatch") return "mismatch";
+
+  // No operating-location evidence detected at all -- fall back to any
+  // bare mention anywhere in the text (no "based in"/"exports to" context
+  // at all). A bare mention never claims exact presence, only "regional"
+  // at best -- it's the weakest signal available, not proof of a home base.
+  const bareFit = compareGeo(matchAliasesIn(evidenceText), target);
+  return bareFit === "exact" ? "regional" : bareFit;
+}
+
+export type GeoStrictness = "strict" | "moderate" | "flexible";
+
+// Candidate roles whose commercial value is fundamentally audience-driven
+// -- a creator/publisher/affiliate's own physical location says little
+// about whether their AUDIENCE overlaps the target market. Geography is
+// still real signal for these (an explicit "UK audience" statement is
+// meaningful), just held to a lighter bar than a physical distributor or a
+// regulated local service.
+const AUDIENCE_DRIVEN_TYPES = new Set<CandidateType>([
+  "Creator",
+  "Affiliate",
+  "Affiliate Network",
+  "Publisher",
+  "Review site",
+  "Newsletter",
+  "Coupon publisher",
+  "Community",
+]);
+// Business-model language signaling a physical-goods/distribution business
+// (import/export/wholesale/shipping/local delivery) -- generic keyword
+// detection on the AI-generated Partner Intent Profile's own free-text
+// businessModel field, never a per-industry or per-business hardcode.
+const PHYSICAL_GOODS_BUSINESS_SIGNALS =
+  /\b(wholesale|distribut(?:ion|or)|import(?:er|s)?|export(?:er|s)?|manufactur(?:er|ing)|shipping|logistics|warehouse|retail(?:er)?|physical product|goods|inventory|freight)\b/i;
+// Regulated/local-service language -- law, accounting, healthcare, licensed
+// trades -- where jurisdiction/location genuinely matters.
+const LOCAL_SERVICE_BUSINESS_SIGNALS =
+  /\b(law firm|legal services|attorneys?|accounting|tax advisory|licensed|regulated|healthcare|clinic|real estate|insurance broker)\b/i;
+
+/**
+ * How strictly geography should count for THIS scan -- derived from the
+ * candidate's own role and the business's Partner Intent Profile
+ * (businessModel), never hardcoded per industry/domain. A physical-goods
+ * or regulated-local-service business needs geography to matter a lot; a
+ * digital/audience-driven candidate (creator, affiliate, publisher) is
+ * held to a lighter bar since its own location matters less than its
+ * audience's.
+ */
+export function inferGeoStrictness(businessModel: string | null, candidateType: CandidateType | null): GeoStrictness {
+  if (candidateType && AUDIENCE_DRIVEN_TYPES.has(candidateType)) return "flexible";
+  if (businessModel && (PHYSICAL_GOODS_BUSINESS_SIGNALS.test(businessModel) || LOCAL_SERVICE_BUSINESS_SIGNALS.test(businessModel))) {
+    return "strict";
+  }
+  return "moderate";
+}
+
+/**
+ * Weights actually applied to Fit (see computeFitScore) -- also the single
+ * source of truth qualification.ts's preview-fallback scoring reuses, so
+ * geography is never scored twice with two different tables. `mismatch`'s
+ * penalty is deliberately large enough that "a +15 keyword/category score"
+ * can't overwhelm a clear geography mismatch, per a strict business's own
+ * strictness tier; `unknown` carries a small penalty (not zero) since an
+ * entity with literally no stated geography is less verifiable than one
+ * with a confirmed adjacent/regional presence -- still far smaller than an
+ * explicit mismatch, and never enough on its own to exclude a candidate.
+ */
+export const GEO_FIT_WEIGHTS: Record<GeoStrictness, Record<GeographicFit, number>> = {
+  strict: { exact: 20, regional: 14, global_relevant: 6, adjacent: -4, unknown: -6, mismatch: -30 },
+  moderate: { exact: 14, regional: 9, global_relevant: 5, adjacent: -2, unknown: -3, mismatch: -18 },
+  flexible: { exact: 8, regional: 5, global_relevant: 4, adjacent: 0, unknown: -1, mismatch: -8 },
+};
 
 export function computeFitScore(input: {
   signalStrength: SignalStrength;
@@ -510,13 +792,10 @@ export function computeFitScore(input: {
    * so existing callers/tests that don't pass it are unaffected.
    */
   hasSufficientEvidence?: boolean;
-  /**
-   * How well this evidence's geography fits the scanning business's own
-   * stated market -- see assessMarketFit. "unknown" (the default) is
-   * neutral, never a penalty; only an explicit, clearly different and
-   * non-adjacent geography reduces Fit.
-   */
-  marketFit?: MarketFit;
+  /** See assessGeographicFit -- how well this evidence's geography fits the scanning business's own stated market. */
+  geographicFit?: GeographicFit;
+  /** The scanning business's own Partner Intent Profile businessModel text -- used only (together with `type`) to derive how strictly geography should count here, see inferGeoStrictness. */
+  businessModel?: string | null;
 }): number {
   const strengthBase: Record<SignalStrength, number> = { strong: 60, medium: 45, potential: 28 };
   let score = strengthBase[input.signalStrength];
@@ -531,14 +810,16 @@ export function computeFitScore(input: {
   if (input.relationshipDirection === "supplies_product") score -= 12;
   else if (input.relationshipDirection && CHANNEL_FIT_DIRECTIONS.has(input.relationshipDirection)) score += 10;
 
-  // Market/geography fit -- "unknown" (the default) never penalizes, so a
-  // globally useful entity is never excluded merely for not naming a
-  // region. Only an explicit, clearly different and non-adjacent geography
-  // (e.g. a US-only distribution footprint for a business whose stated
-  // market is the EU/UK) meaningfully reduces Fit.
-  if (input.marketFit === "exact") score += 8;
-  else if (input.marketFit === "global") score += 4;
-  else if (input.marketFit === "mismatch") score -= 15;
+  // Geographic fit -- a real qualification signal, not a small flat bonus:
+  // weighted by how strictly THIS business/candidate combination should
+  // care about geography (see inferGeoStrictness/GEO_FIT_WEIGHTS). A
+  // physical-goods or regulated-local-service business is hit hard by a
+  // clear mismatch; a digital/audience-driven candidate (creator,
+  // affiliate, publisher) is held to a lighter bar.
+  if (input.geographicFit) {
+    const strictness = inferGeoStrictness(input.businessModel ?? null, input.type);
+    score += GEO_FIT_WEIGHTS[strictness][input.geographicFit];
+  }
 
   // Competitor-owned infrastructure, a directly comparable business, a
   // non-entity evidence source (see NON_PARTNER_TYPES), or evidence that

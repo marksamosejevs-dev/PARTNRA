@@ -295,7 +295,7 @@ async function discoverForCompetitor(
     // rescued -- a plain brand mention with nothing else stays excluded.
     const aiRejectedUrls = new Set(aiResult.filter((r) => !r.validCandidate).map((r) => r.sourceUrl));
     const rejectedItems = classifyInput.filter((item) => aiRejectedUrls.has(item.url));
-    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow], { categoryPhrases, intent, market: businessContext.market });
+    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow], { categoryPhrases, intent, market: businessContext.market, businessModel: businessContext.businessModel });
     funnel.rescuedScored = rescued.length;
     funnel.rejectedWeakEvidence = aiRejectedUrls.size + overflow.length - rescued.length;
 
@@ -311,7 +311,7 @@ async function discoverForCompetitor(
     // already-discovered evidence pool -- degrade to deterministic,
     // clearly-unverified scoring over the full pool instead of rejecting.
     log.fail("classification", err, { domain: competitor.domain, provider: "anthropic" });
-    classified = scoreUnverified(pool, { categoryPhrases, intent, market: businessContext.market });
+    classified = scoreUnverified(pool, { categoryPhrases, intent, market: businessContext.market, businessModel: businessContext.businessModel });
     funnel.timedOutFallbackScored = classified.length;
     log.mark("classification_end", { domain: competitor.domain, classified: classified.length, verified: false });
   }
@@ -577,7 +577,7 @@ export async function POST(request: NextRequest) {
       return errorResponse("We couldn't complete the search right now. Please try again in a moment.", 502);
     }
 
-    const deduped = dedupeCandidates(allClassified, intent, businessContext.market);
+    const deduped = dedupeCandidates(allClassified, intent, businessContext.market, businessContext.businessModel);
 
     // ONE canonical qualification step for every candidate, regardless of
     // which discovery/classification path produced it -- see
@@ -699,7 +699,7 @@ export async function POST(request: NextRequest) {
     let quickScanCandidates = potentialPartners;
     let previewFallbackUsed = false;
     if (potentialPartners.length === 0) {
-      const fallback = selectPreviewFallbackCandidate(qualifications, businessContext.market);
+      const fallback = selectPreviewFallbackCandidate(qualifications, businessContext.market, businessContext.businessModel);
       log.mark("preview_fallback", {
         normalQualifiedCount: 0,
         weakOrRejectedCount: qualifications.length,
