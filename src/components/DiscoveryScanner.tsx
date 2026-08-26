@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import { Arrow } from "./ui/Arrow";
 import { EvidenceCard } from "./ui/EvidenceCard";
-import { DeepDiscoveryPanel } from "./ui/DeepDiscoveryPanel";
+import { DeepDiscoveryPanel, readStoredPointer, type DeepDiscoveryPointer } from "./ui/DeepDiscoveryPanel";
 import { normalizeBrandUrl } from "@/lib/discovery/domain";
 import type { Candidate, DiscoverErrorResponse, DiscoverResponse } from "@/lib/discovery/types";
 
@@ -62,12 +62,26 @@ export function DiscoveryScanner() {
   const [stageIndex, setStageIndex] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [result, setResult] = useState<DiscoverResponse | null>(null);
+  const [restoredPointer, setRestoredPointer] = useState<DeepDiscoveryPointer | null>(null);
   const stageTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     return () => {
       if (stageTimer.current) clearInterval(stageTimer.current);
     };
+  }, []);
+
+  // Restoration (Problem B): a page load never has any Quick Scan `result`
+  // in memory, so DeepDiscoveryPanel below is otherwise unreachable even
+  // though a real, persisted Deep Discovery scan may still exist in
+  // Supabase. The only thing that survives the reload client-side is a
+  // small {scanId, domain} pointer -- never results/counters themselves --
+  // read once on mount; everything else still comes from the server.
+  useEffect(() => {
+    // localStorage only exists client-side, so this can't be a lazy
+    // useState initializer without causing an SSR/hydration mismatch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRestoredPointer(readStoredPointer());
   }, []);
 
   async function handleSubmit(e: FormEvent) {
@@ -176,7 +190,20 @@ export function DiscoveryScanner() {
         </button>
       </form>
 
-      {phase === "idle" && <IdlePreview />}
+      {phase === "idle" && !restoredPointer && <IdlePreview />}
+
+      {phase === "idle" && restoredPointer && (
+        <div className="mt-6">
+          <p className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/40">
+            Continuing research for {restoredPointer.domain}
+          </p>
+          <DeepDiscoveryPanel
+            domain={restoredPointer.domain}
+            initialScanId={restoredPointer.scanId}
+            onScanCleared={() => setRestoredPointer(null)}
+          />
+        </div>
+      )}
 
       {phase === "scanning" && (
         <div className="mt-6 flex items-center gap-3 rounded-2xl border border-ink/10 bg-surface/40 p-5">

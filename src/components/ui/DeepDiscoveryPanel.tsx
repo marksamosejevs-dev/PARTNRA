@@ -10,12 +10,25 @@ import { Arrow } from "./Arrow";
  * uses elsewhere) rather than introducing new page structure. Polling
  * here is a UX convenience only, never the actual persistence mechanism
  * -- the underlying scan keeps advancing via the scheduled background
- * worker whether or not this component is even mounted.
+ * worker whether or not this component is even mounted, and the
+ * `scanId` pointer below (never the results themselves) is the only
+ * thing that survives a refresh client-side -- Supabase, reached via the
+ * status API, remains the sole source of truth for status/results.
  */
 
 const POLL_INTERVAL_MS = 4000;
+const POINTER_STORAGE_KEY = "partnra:deepDiscoveryPointer";
 
-type PanelStatus = "idle" | "starting" | "running" | "completed" | "completed_with_warnings" | "failed" | "unavailable" | "error";
+type PanelStatus =
+  | "idle"
+  | "starting"
+  | "restoring"
+  | "running"
+  | "completed"
+  | "completed_with_warnings"
+  | "failed"
+  | "unavailable"
+  | "error";
 
 interface DeepDiscoveryProgress {
   comparableBrandsTarget: number | null;
@@ -50,45 +63,135 @@ interface StatusResponse {
   error: string | null;
 }
 
+export interface DeepDiscoveryPointer {
+  scanId: string;
+  domain: string;
+}
+
+/** The ONLY thing ever written to localStorage for Deep Discovery -- a pointer, never results/counters. Safe to fail (private browsing, disabled storage, malformed JSON left over from an older version). */
+export function readStoredPointer(): DeepDiscoveryPointer | null {
+  try {
+    const raw = window.localStorage.getItem(POINTER_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as Record<string, unknown>).scanId === "string" &&
+      typeof (parsed as Record<string, unknown>).domain === "string"
+    ) {
+      return parsed as DeepDiscoveryPointer;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredPointer(pointer: DeepDiscoveryPointer): void {
+  try {
+    window.localStorage.setItem(POINTER_STORAGE_KEY, JSON.stringify(pointer));
+  } catch {
+    // Storage being unavailable never blocks the scan itself -- Supabase
+    // already has it; the user just won't get refresh restoration.
+  }
+}
+
+export function clearStoredPointer(): void {
+  try {
+    window.localStorage.removeItem(POINTER_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+const TERMINAL_STATUSES = new Set(["completed", "completed_with_warnings", "failed"]);
+
+/** Pure so TEST A-D can exercise it directly: the persisted `status` string is the sole authority -- never gated on counters, never requiring analysed===target. An unrecognized status (e.g. "queued") is treated as still in progress, never as complete. */
+export function derivePanelStatus(rawStatus: string): PanelStatus {
+  if (rawStatus === "completed" || rawStatus === "completed_with_warnings" || rawStatus === "failed") {
+    return rawStatus;
+  }
+  return "running";
+}
+
+export function isTerminalPanelStatus(status: PanelStatus): boolean {
+  return TERMINAL_STATUSES.has(status);
+}
+
 function humanizeDirection(direction: string): string {
   return direction.replace(/_/g, " ");
 }
 
-export function DeepDiscoveryPanel({ domain }: { domain: string }) {
-  const [status, setStatus] = useState<PanelStatus>("idle");
+export function DeepDiscoveryPanel({
+  domain,
+  initialScanId,
+  onScanCleared,
+}: {
+  domain: string;
+  /** Set only when restoring an already-started scan after a page load -- see DiscoveryScanner's pointer-restoration block. */
+  initialScanId?: string;
+  /** Fires only on a definitive 404 (the pointer no longer refers to a real scan) -- never on a transient network error, so a flaky connection can't destroy a valid pointer. */
+  onScanCleared?: () => void;
+}) {
+  const [scanId, setScanId] = useState<string | null>(initialScanId ?? null);
+  const [status, setStatus] = useState<PanelStatus>(initialScanId ? "restoring" : "idle");
   const [data, setData] = useState<StatusResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const requestIdRef = useRef(0);
+
+  const isTerminal = isTerminalPanelStatus(status);
 
   useEffect(() => {
-    return () => {
-      if (pollTimer.current) clearInterval(pollTimer.current);
-    };
-  }, []);
+    if (!scanId || isTerminal) return;
 
-  async function pollStatus(scanId: string) {
-    try {
-      const res = await fetch(`/api/deep-discovery/status/${scanId}`);
-      const json = (await res.json()) as Record<string, unknown>;
-      if (!res.ok) {
-        setStatus("error");
-        setErrorMsg(typeof json.error === "string" ? json.error : "Something went wrong.");
-        if (pollTimer.current) clearInterval(pollTimer.current);
-        return;
+    let cancelled = false;
+
+    async function poll() {
+      const myRequestId = ++requestIdRef.current;
+      try {
+        const res = await fetch(`/api/deep-discovery/status/${scanId}`, { cache: "no-store" });
+        if (cancelled || myRequestId !== requestIdRef.current) return; // a slower, older request must never overwrite a newer one
+        const json = (await res.json()) as Record<string, unknown>;
+        if (cancelled || myRequestId !== requestIdRef.current) return;
+
+        if (!res.ok) {
+          if (res.status === 404) {
+            // The pointer no longer refers to a real scan -- clear it and
+            // fall back to the normal idle state rather than getting stuck.
+            clearStoredPointer();
+            setScanId(null);
+            setStatus("idle");
+            onScanCleared?.();
+            return;
+          }
+          // Any other failure is treated as transient -- a single missed
+          // poll must never erase an already-running/-restoring scan; the
+          // next tick tries again.
+          return;
+        }
+
+        const statusData = json as unknown as StatusResponse;
+        setData(statusData);
+        setStatus(derivePanelStatus(statusData.status));
+      } catch {
+        // Network error -- transient, self-heals on the next tick.
       }
-      const statusData = json as unknown as StatusResponse;
-      setData(statusData);
-      if (statusData.status === "completed" || statusData.status === "completed_with_warnings" || statusData.status === "failed") {
-        setStatus(statusData.status as PanelStatus);
-        if (pollTimer.current) clearInterval(pollTimer.current);
-      } else {
-        setStatus("running");
-      }
-    } catch {
-      // A single missed poll isn't fatal -- the scan is persisted server-
-      // side regardless; just try again on the next tick.
     }
-  }
+
+    poll();
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") poll();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [scanId, isTerminal, onScanCleared]);
 
   async function start() {
     setStatus("starting");
@@ -98,6 +201,7 @@ export function DeepDiscoveryPanel({ domain }: { domain: string }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ brandUrl: domain }),
+        cache: "no-store",
       });
       const json = (await res.json()) as { scanId?: string; error?: string };
       if (res.status === 501) {
@@ -109,9 +213,9 @@ export function DeepDiscoveryPanel({ domain }: { domain: string }) {
         setErrorMsg(json.error ?? "Something went wrong starting Deep Discovery.");
         return;
       }
+      writeStoredPointer({ scanId: json.scanId, domain });
       setStatus("running");
-      await pollStatus(json.scanId);
-      pollTimer.current = setInterval(() => pollStatus(json.scanId as string), POLL_INTERVAL_MS);
+      setScanId(json.scanId);
     } catch {
       setStatus("error");
       setErrorMsg("Something went wrong starting Deep Discovery.");
@@ -142,11 +246,13 @@ export function DeepDiscoveryPanel({ domain }: { domain: string }) {
     );
   }
 
-  if (status === "starting" || (status === "running" && !data)) {
+  if (status === "starting" || status === "restoring" || (status === "running" && !data)) {
     return (
       <div className="mt-4 flex items-center gap-3 rounded-2xl border border-ink/10 bg-surface/40 p-5">
         <span className="pulse-dot h-2 w-2 shrink-0 rounded-full bg-lime" />
-        <span className="font-mono-label text-sm text-ink/60">Starting Deep Discovery...</span>
+        <span className="font-mono-label text-sm text-ink/60">
+          {status === "restoring" ? "Restoring your Deep Discovery scan..." : "Starting Deep Discovery..."}
+        </span>
       </div>
     );
   }
@@ -163,6 +269,7 @@ export function DeepDiscoveryPanel({ domain }: { domain: string }) {
 
   const p = data.progress;
   const isRunning = status === "running";
+  const isCompletedWithWarnings = status === "completed_with_warnings";
 
   return (
     <div className="mt-4 rounded-2xl border border-ink/10 bg-surface/40 p-5">
@@ -173,11 +280,19 @@ export function DeepDiscoveryPanel({ domain }: { domain: string }) {
         </span>
       </div>
       <p className="font-mono-label mt-2 text-[11px] uppercase tracking-[0.1em] text-ink/40">
-        {p.comparableBrandsTarget ? `${p.comparableBrandsAnalysed} / ${p.comparableBrandsTarget} comparable brands analysed` : "Expanding comparable brands..."}
+        {p.comparableBrandsTarget
+          ? isRunning
+            ? `${p.comparableBrandsAnalysed} / ${p.comparableBrandsTarget} comparable brands analysed`
+            : `${p.comparableBrandsAnalysed} of ${p.comparableBrandsTarget} comparable brands analysed`
+          : "Expanding comparable brands..."}
         {p.signalsReviewed > 0 ? ` · ${p.signalsReviewed} public signals reviewed` : ""}
         {p.entitiesResolved > 0 ? ` · ${p.entitiesResolved} entities resolved` : ""}
         {p.opportunitiesQualified > 0 ? ` · ${p.opportunitiesQualified} qualified opportunit${p.opportunitiesQualified === 1 ? "y" : "ies"}` : ""}
       </p>
+
+      {isCompletedWithWarnings && (
+        <p className="mt-2 text-sm text-ink/50">A few steps didn&rsquo;t finish, but the results below are real and safe to use.</p>
+      )}
 
       {(status === "completed" || status === "completed_with_warnings") && data.preview && (
         <div className="mt-4 rounded-xl border border-ink/8 bg-paper/70 p-4">

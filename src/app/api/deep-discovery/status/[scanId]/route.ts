@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isGraphConfigured } from "@/lib/graph/client";
-import { getScan, getOpportunitiesForBusiness, countJobsByStatus } from "@/lib/graph/repository";
+import { getScan, getOpportunitiesForBusiness, countJobsByStatus, getBusinessById } from "@/lib/graph/repository";
+
+// Status must always reflect the current DB row -- never a cached response
+// from an earlier poll (Netlify/CDN/browser). This is a status check, not
+// content that benefits from caching.
+export const dynamic = "force-dynamic";
 
 function errorResponse(message: string, status: number) {
-  return NextResponse.json({ error: message }, { status });
+  return NextResponse.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
 }
 
 /**
@@ -23,9 +28,10 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ sc
     const scan = await getScan(scanId);
     if (!scan) return errorResponse("Scan not found.", 404);
 
-    const [opportunities, jobCounts] = await Promise.all([
+    const [opportunities, jobCounts, business] = await Promise.all([
       getOpportunitiesForBusiness(scan.business_id),
       countJobsByStatus(scanId),
+      getBusinessById(scan.business_id),
     ]);
 
     // Only STRONG/GOOD opportunities are ever shown -- the same
@@ -35,40 +41,44 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ sc
     const previewOpportunity = scan.preview_entity_id ? shown.find((o) => o.entity_id === scan.preview_entity_id) ?? null : null;
     const additionalOpportunityCount = previewOpportunity ? shown.length - 1 : shown.length;
 
-    return NextResponse.json({
-      scanId: scan.id,
-      status: scan.status,
-      progress: {
-        comparableBrandsTarget: scan.comparable_brands_target,
-        comparableBrandsAnalysed: scan.comparable_brands_analysed,
-        signalsReviewed: scan.signals_reviewed,
-        entitiesResolved: scan.entity_count,
-        relationshipsFound: scan.relationship_count,
-        opportunitiesQualified: scan.opportunity_count,
-        jobsQueued: jobCounts.queued,
-        jobsRunning: jobCounts.running,
+    return NextResponse.json(
+      {
+        scanId: scan.id,
+        status: scan.status,
+        business: business ? { domain: business.domain, name: business.name } : null,
+        progress: {
+          comparableBrandsTarget: scan.comparable_brands_target,
+          comparableBrandsAnalysed: scan.comparable_brands_analysed,
+          signalsReviewed: scan.signals_reviewed,
+          entitiesResolved: scan.entity_count,
+          relationshipsFound: scan.relationship_count,
+          opportunitiesQualified: scan.opportunity_count,
+          jobsQueued: jobCounts.queued,
+          jobsRunning: jobCounts.running,
+        },
+        preview: previewOpportunity
+          ? {
+              name: previewOpportunity.entities.name,
+              partnerType: previewOpportunity.partner_type,
+              relationshipDirection: previewOpportunity.relationship_direction,
+              geographicFit: previewOpportunity.geographic_fit,
+              partnraFit: previewOpportunity.partnra_fit,
+              evidenceConfidence: previewOpportunity.evidence_confidence,
+              qualityTier: previewOpportunity.quality_tier,
+              potentialRelationship: previewOpportunity.potential_relationship,
+              applicationUrl: previewOpportunity.entities.application_url,
+              contact: previewOpportunity.entities.public_contact,
+            }
+          : null,
+        previewSelectionReason: scan.preview_selection_reason,
+        // Real, not fabricated: exactly `shown.length` minus the one already
+        // rendered as the preview -- never a guessed or padded number.
+        additionalOpportunityCount,
+        warnings: scan.warnings,
+        error: scan.error,
       },
-      preview: previewOpportunity
-        ? {
-            name: previewOpportunity.entities.name,
-            partnerType: previewOpportunity.partner_type,
-            relationshipDirection: previewOpportunity.relationship_direction,
-            geographicFit: previewOpportunity.geographic_fit,
-            partnraFit: previewOpportunity.partnra_fit,
-            evidenceConfidence: previewOpportunity.evidence_confidence,
-            qualityTier: previewOpportunity.quality_tier,
-            potentialRelationship: previewOpportunity.potential_relationship,
-            applicationUrl: previewOpportunity.entities.application_url,
-            contact: previewOpportunity.entities.public_contact,
-          }
-        : null,
-      previewSelectionReason: scan.preview_selection_reason,
-      // Real, not fabricated: exactly `shown.length` minus the one already
-      // rendered as the preview -- never a guessed or padded number.
-      additionalOpportunityCount,
-      warnings: scan.warnings,
-      error: scan.error,
-    });
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (err) {
     return errorResponse(err instanceof Error ? err.message : "Something went wrong reading Deep Discovery status.", 500);
   }
