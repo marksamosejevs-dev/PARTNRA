@@ -29,7 +29,9 @@ function buildExpansionPrompt(profile: BusinessProfile, existingNames: string[])
 
 Already-known comparable/competitor brands: ${existingNames.length > 0 ? existingNames.join(", ") : "none yet"}.
 
-List up to ${DEEP_DISCOVERY_LIMITS.maxBrandExpansionCandidates} ADDITIONAL real, currently-operating comparable or competitor brands in the SAME commercial category, selling a genuinely comparable product/service to a similar customer -- not merely sharing a keyword. Do not repeat any already-known brand.`;
+List up to ${DEEP_DISCOVERY_LIMITS.maxBrandExpansionCandidates} ADDITIONAL real, currently-operating comparable or competitor brands in the SAME commercial category, selling a genuinely comparable product/service to a similar customer -- not merely sharing a keyword. Do not repeat any already-known brand.
+
+Prefer brands that plausibly already have a visible partner/affiliate ecosystem -- e.g. ones known to run an affiliate program, referral program, ambassador program, or sponsored-creator/promo-code partnerships -- since those are the ones Deep Discovery can most productively investigate for real, evidenced partner relationships. This is a preference, not a requirement: still include a genuinely comparable brand even if you're unsure whether it has such a program.`;
 }
 
 const SCHEMA = {

@@ -1,4 +1,4 @@
-import { discoverFromWeb } from "../discovery/sources/web";
+import { discoverFromWeb, discoverFromQueries } from "../discovery/sources/web";
 import { discoverFromOpenAI } from "../discovery/sources/openai";
 import { discoverFromYoutube } from "../discovery/sources/youtube";
 import {
@@ -41,6 +41,32 @@ import { BrandRow } from "../graph/types";
 const SOURCE_TIMEOUT_MS = 8_000;
 const CLASSIFY_TIMEOUT_MS = 10_000;
 
+/**
+ * discoverFromWeb/OpenAI/YouTube already search for the brand generically
+ * (the same queries Quick Scan uses for its one resolved competitor) --
+ * that finds topical mentions, but Deep Discovery specifically wants
+ * evidence of a COMMERCIAL relationship, not just a page that discusses
+ * the brand. These are generic commission/affiliate-ecosystem terms, not
+ * tied to any product category -- the same vocabulary applies whether the
+ * brand sells supplements, software, or anything else sold through
+ * affiliates/referrals. Grouped into a few short OR-queries (never one
+ * giant boolean query, and never every term every time) to stay within a
+ * sane per-brand query-count budget.
+ */
+const COMMERCIAL_RELATIONSHIP_QUERY_GROUPS: string[][] = [
+  ["affiliate", "affiliate disclosure", "affiliate program", "partner program", "referral program"],
+  ["promo code", "discount code", "coupon code", "creator code", "commission"],
+  ["review", "product review", "best alternatives", "comparison", "recommended products", "sponsored", "ambassador", "where to buy"],
+];
+
+/** Adapts the generic vocabulary to THIS brand and (when known) THIS business's category -- never a hardcoded product category. */
+function buildCommercialRelationshipQueries(brandName: string, category: string | null): string[] {
+  return COMMERCIAL_RELATIONSHIP_QUERY_GROUPS.map((group) => {
+    const terms = group.map((term) => `"${term}"`).join(" OR ");
+    return category ? `"${brandName}" ${category} (${terms})` : `"${brandName}" (${terms})`;
+  });
+}
+
 function hostnameOf(url: string | null): string | null {
   if (!url) return null;
   try {
@@ -72,12 +98,19 @@ export async function expandBrandRelationships(params: {
   const concepts = businessContext.commercialIntentConcepts;
   const brandDomain = brand.domain ?? "";
 
-  const [webResult, openaiResult, youtubeResult] = await Promise.all([
+  const commercialRelationshipQueries = buildCommercialRelationshipQueries(brand.name, businessContext.category);
+  const [webResult, openaiResult, youtubeResult, commercialResult] = await Promise.all([
     withFallback((s) => discoverFromWeb(brand.name, brandDomain, s, concepts), SOURCE_TIMEOUT_MS, `web (${brandDomain})`, [] as SourceItem[]),
     withFallback((s) => discoverFromOpenAI(brand.name, s, concepts), SOURCE_TIMEOUT_MS, `openai (${brandDomain})`, [] as SourceItem[]),
     withFallback((s) => discoverFromYoutube(brand.name, s, concepts), SOURCE_TIMEOUT_MS, `youtube (${brandDomain})`, [] as SourceItem[]),
+    withFallback(
+      (s) => discoverFromQueries(commercialRelationshipQueries, s),
+      SOURCE_TIMEOUT_MS,
+      `commercial-relationship search (${brandDomain})`,
+      [] as SourceItem[]
+    ),
   ]);
-  const combined: SourceItem[] = [...webResult, ...openaiResult, ...youtubeResult];
+  const combined: SourceItem[] = [...webResult, ...openaiResult, ...youtubeResult, ...commercialResult];
 
   const pool: SourceItem[] = [];
   const seenUrls = new Set<string>();
