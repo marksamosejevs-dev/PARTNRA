@@ -67,6 +67,14 @@ const TYPE_KEYWORD_RULES: Array<{ type: CandidateType; test: RegExp }> = [
   { type: "Affiliate Network", test: /affiliate network|performance marketing network|cpa network/i },
   { type: "Affiliate", test: /affiliate program|become an affiliate|partner program|advertiser sign[- ]?up|join our affiliate/i },
   { type: "Coupon publisher", test: /promo code|discount code|coupon|% off|deal(s)?\b/i },
+  // Checked BEFORE Wholesaler/Importer/Distributor below: a sourcing
+  // platform's own page routinely mentions "buyers", "importers" and
+  // "wholesalers" as the THIRD PARTIES using it (e.g. "buy requests from
+  // ENplus pellet buyers, importers and wholesalers") -- that incidental
+  // mention shouldn't make the platform ITSELF a Wholesaler/Importer; the
+  // explicit marketplace/buy-request/sourcing-platform language is the
+  // stronger, more specific signal of what the entity actually is.
+  { type: "Marketplace", test: /marketplace|\bbuy request(?:s)?\b|\bbuyer(?:s)? directory\b|b2b sourcing platform/i },
   { type: "Wholesaler", test: /wholesale(r)?/i },
   { type: "Importer", test: /\bimporter\b|import(?:s|ed)? (?:from|of)\b/i },
   { type: "Distributor", test: /distributor/i },
@@ -74,7 +82,6 @@ const TYPE_KEYWORD_RULES: Array<{ type: CandidateType; test: RegExp }> = [
   { type: "Reseller", test: /\breseller\b/i },
   { type: "Commercial buyer", test: /\b(procurement|sourcing|bulk buyer|purchasing department|request a quote|rfq)\b/i },
   { type: "Referral partner", test: /\breferral partner\b|refer (?:a )?client|client referral/i },
-  { type: "Marketplace", test: /marketplace/i },
 ];
 
 /**
@@ -140,6 +147,31 @@ function isNonEntityPlatformHost(hostname: string): boolean {
 const DIRECTORY_OR_PROFILE_SIGNALS =
   /\b(directory|rankings?|ranked|find a lawyer|find a firm|browse (?:law firms|lawyers|attorneys|firms)|firm profile|lawyer profile|attorney profile|company profile)\b/i;
 
+/**
+ * An institutional/research/regulatory publisher (a national health
+ * institute, a peer-reviewed journal, a government agency) can be genuine,
+ * useful evidence that a category/compound/technology is real and
+ * commercially discussed -- it is never itself a recruitable commercial
+ * partner. Generic role-logic, not a named-institution denylist: a `.gov`
+ * (or equivalent government) domain, or peer-reviewed/clinical-research
+ * language wherever it's hosted, both mean the same thing regardless of
+ * which specific agency or journal it is.
+ */
+const INSTITUTIONAL_SOURCE_SIGNALS =
+  /\b(peer[- ]reviewed|clinical trial(?:s)?|systematic review|meta-analysis|randomized controlled trial|cochrane review|published in the journal|national institutes? of health|regulatory (?:agency|authority|body)|government agency|official statistics)\b/i;
+
+function isInstitutionalHost(hostname: string): boolean {
+  const host = hostname.replace(/^www\./i, "").toLowerCase();
+  const govLikeTlds = [".gov", ".gov.uk", ".gc.ca", ".govt.nz", ".gov.au"];
+  if (govLikeTlds.some((tld) => host.endsWith(tld))) return true;
+  // A small set of major research-database/health-authority domains whose
+  // OWN hosting of a page (rather than content elsewhere merely mentioning
+  // them) makes that page institutional evidence -- these are database
+  // platforms, not commercial entities under any TLD pattern.
+  const researchDatabaseHosts = new Set(["nih.gov", "ncbi.nlm.nih.gov", "pubmed.ncbi.nlm.nih.gov", "who.int", "clinicaltrials.gov"]);
+  return Array.from(researchDatabaseHosts).some((h) => host === h || host.endsWith(`.${h}`));
+}
+
 /** A PDF/document URL is evidence, not a commercial entity to resolve a partner from. */
 function isDocumentUrl(url: string): boolean {
   try {
@@ -191,6 +223,17 @@ export function classifyPartnerType(item: SourceItem): CandidateType {
   if (hostname && isNonEntityPlatformHost(hostname) && !item.entityName) return "Evidence source";
 
   const text = `${item.title} ${item.snippet}`;
+
+  // A government/research-database host, or peer-reviewed/clinical-research
+  // language wherever it appears, describes institutional/scientific
+  // evidence -- real and useful for understanding a category, but never
+  // itself an independent commercial partner. Checked before the keyword
+  // rules below so shared topical/technical vocabulary (the same compound,
+  // molecule, or scientific term this business's category also uses)
+  // can't promote a research institute into e.g. "Review site".
+  if ((hostname && isInstitutionalHost(hostname)) || INSTITUTIONAL_SOURCE_SIGNALS.test(text)) {
+    return "Evidence source";
+  }
 
   // A directory/ranking/profile page's professional-services (or other
   // role) keywords describe the THIRD PARTY it profiles, not the
@@ -351,6 +394,7 @@ const HIGH_VALUE_TYPES = new Set<CandidateType>([
   "Importer",
   "Reseller",
   "Trader",
+  "Marketplace",
   "Commercial buyer",
   "Referral partner",
   "Professional services firm",
@@ -384,6 +428,64 @@ const CHANNEL_FIT_DIRECTIONS = new Set<RelationshipDirection>([
   "buys_product",
 ]);
 
+/**
+ * A lightweight, generic region-alias lookup -- not exhaustive geopolitics,
+ * just enough to tell whether a business's own stated market and a
+ * candidate's evidence text are talking about the same, an adjacent, or a
+ * clearly different geography. Grouped by broad market names rather than
+ * every individual country, and deliberately small: the goal is "does this
+ * evidence's geography plausibly serve this business's market", not a
+ * precise geopolitical classifier.
+ */
+const REGION_ALIASES: Record<string, string[]> = {
+  "united states": ["united states", "u.s.a.", "u.s.", "usa", "america", "american", "stateside"],
+  canada: ["canada", "canadian"],
+  "united kingdom": ["united kingdom", "u.k.", " uk ", "britain", "british", "england", "scotland", "wales"],
+  "european union": ["european union", " eu ", "europe", "european"],
+  australia: ["australia", "australian"],
+  "new zealand": ["new zealand"],
+};
+const GLOBAL_MARKET_SIGNALS = /\b(worldwide|globally|international(?:ly)?|multiple countries|ships internationally)\b/i;
+// UK and EU markets have enough real commercial/trade overlap (freight,
+// import routes, shared regulatory language) to treat evidence from one as
+// an adjacent (not mismatched) market for a business based in the other --
+// still not an exact match, but not a penalty either.
+const ADJACENT_REGION_PAIRS: Array<[string, string]> = [["united kingdom", "european union"]];
+
+function detectRegions(text: string): Set<string> {
+  const padded = ` ${text.toLowerCase()} `;
+  const found = new Set<string>();
+  for (const [region, aliases] of Object.entries(REGION_ALIASES)) {
+    if (aliases.some((alias) => padded.includes(alias))) found.add(region);
+  }
+  return found;
+}
+
+export type MarketFit = "exact" | "global" | "adjacent" | "mismatch" | "unknown";
+
+/**
+ * "unknown" (never a penalty) whenever either side's geography isn't
+ * confidently detectable -- this must never exclude a globally useful
+ * entity just because neither the business's own market nor a candidate's
+ * evidence text happened to name a region explicitly. Only an explicit,
+ * clearly DIFFERENT (and non-adjacent) region on both sides is a real
+ * mismatch -- e.g. a business whose stated market is the EU/UK, given
+ * evidence that explicitly describes a US-only distribution footprint.
+ */
+export function assessMarketFit(evidenceText: string, businessMarket: string | null): MarketFit {
+  if (!businessMarket) return "unknown";
+  const businessRegions = detectRegions(businessMarket);
+  if (businessRegions.size === 0) return "unknown";
+  if (GLOBAL_MARKET_SIGNALS.test(evidenceText)) return "global";
+  const evidenceRegions = detectRegions(evidenceText);
+  if (evidenceRegions.size === 0) return "unknown";
+  if (Array.from(evidenceRegions).some((r) => businessRegions.has(r))) return "exact";
+  const isAdjacent = ADJACENT_REGION_PAIRS.some(
+    ([a, b]) => (businessRegions.has(a) && evidenceRegions.has(b)) || (businessRegions.has(b) && evidenceRegions.has(a))
+  );
+  return isAdjacent ? "adjacent" : "mismatch";
+}
+
 export function computeFitScore(input: {
   signalStrength: SignalStrength;
   verified: boolean;
@@ -408,6 +510,13 @@ export function computeFitScore(input: {
    * so existing callers/tests that don't pass it are unaffected.
    */
   hasSufficientEvidence?: boolean;
+  /**
+   * How well this evidence's geography fits the scanning business's own
+   * stated market -- see assessMarketFit. "unknown" (the default) is
+   * neutral, never a penalty; only an explicit, clearly different and
+   * non-adjacent geography reduces Fit.
+   */
+  marketFit?: MarketFit;
 }): number {
   const strengthBase: Record<SignalStrength, number> = { strong: 60, medium: 45, potential: 28 };
   let score = strengthBase[input.signalStrength];
@@ -421,6 +530,15 @@ export function computeFitScore(input: {
 
   if (input.relationshipDirection === "supplies_product") score -= 12;
   else if (input.relationshipDirection && CHANNEL_FIT_DIRECTIONS.has(input.relationshipDirection)) score += 10;
+
+  // Market/geography fit -- "unknown" (the default) never penalizes, so a
+  // globally useful entity is never excluded merely for not naming a
+  // region. Only an explicit, clearly different and non-adjacent geography
+  // (e.g. a US-only distribution footprint for a business whose stated
+  // market is the EU/UK) meaningfully reduces Fit.
+  if (input.marketFit === "exact") score += 8;
+  else if (input.marketFit === "global") score += 4;
+  else if (input.marketFit === "mismatch") score -= 15;
 
   // Competitor-owned infrastructure, a directly comparable business, a
   // non-entity evidence source (see NON_PARTNER_TYPES), or evidence that

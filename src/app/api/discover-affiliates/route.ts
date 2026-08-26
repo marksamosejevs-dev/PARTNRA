@@ -33,7 +33,7 @@ import { fetchCategoryPool, classifyCategoryPool, StrategyFunnel } from "@/lib/d
 import { raceWithTimeout, withFallback, raceValueWithTimeout, StageTimeoutError } from "@/lib/discovery/timeout";
 import { createScanLogger } from "@/lib/discovery/scanLogger";
 import { DiscoverResponse, SourceItem, ClassifiedResult } from "@/lib/discovery/types";
-import { qualifyOpportunity } from "@/lib/discovery/qualification";
+import { qualifyOpportunity, QualityTier } from "@/lib/discovery/qualification";
 
 function buildBusinessContext(profile: BusinessProfile): BusinessContext {
   return {
@@ -94,8 +94,14 @@ const ENRICH_TIMEOUT_MS = 3_500;
 // priority -- easy to raise once real deployed timings confirm headroom.
 const MAX_COMPETITORS = 1;
 const MAX_CANDIDATE_POOL = 30;
-const MAX_RESULTS_RETURNED = 5;
-const MAX_ENRICHED = 5;
+// Upper bounds only, never a floor -- Quick Scan returns however many
+// candidates genuinely pass qualifyOpportunity's quality gate (see
+// qualification.ts), from zero up to this cap. Raised from the previous
+// 5 so a scan that genuinely finds many strong opportunities isn't
+// arbitrarily truncated, while staying well short of turning Quick Scan
+// into a full lead list.
+const MAX_RESULTS_RETURNED = 8;
+const MAX_ENRICHED = 8;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_MAX = 5;
 
@@ -289,7 +295,7 @@ async function discoverForCompetitor(
     // rescued -- a plain brand mention with nothing else stays excluded.
     const aiRejectedUrls = new Set(aiResult.filter((r) => !r.validCandidate).map((r) => r.sourceUrl));
     const rejectedItems = classifyInput.filter((item) => aiRejectedUrls.has(item.url));
-    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow], categoryPhrases, intent);
+    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow], { categoryPhrases, intent, market: businessContext.market });
     funnel.rescuedScored = rescued.length;
     funnel.rejectedWeakEvidence = aiRejectedUrls.size + overflow.length - rescued.length;
 
@@ -305,7 +311,7 @@ async function discoverForCompetitor(
     // already-discovered evidence pool -- degrade to deterministic,
     // clearly-unverified scoring over the full pool instead of rejecting.
     log.fail("classification", err, { domain: competitor.domain, provider: "anthropic" });
-    classified = scoreUnverified(pool, categoryPhrases, intent);
+    classified = scoreUnverified(pool, { categoryPhrases, intent, market: businessContext.market });
     funnel.timedOutFallbackScored = classified.length;
     log.mark("classification_end", { domain: competitor.domain, classified: classified.length, verified: false });
   }
@@ -571,7 +577,7 @@ export async function POST(request: NextRequest) {
       return errorResponse("We couldn't complete the search right now. Please try again in a moment.", 502);
     }
 
-    const deduped = dedupeCandidates(allClassified, intent);
+    const deduped = dedupeCandidates(allClassified, intent, businessContext.market);
 
     // ONE canonical qualification step for every candidate, regardless of
     // which discovery/classification path produced it -- see
@@ -582,20 +588,35 @@ export async function POST(request: NextRequest) {
     // Intelligence" UI section to show it in without redesigning the
     // site) -- but logged per-candidate below so a real run is auditable
     // without guessing why something did or didn't make the list.
-    const qualifications = deduped.map((c) => ({ candidate: c, classification: qualifyOpportunity(c) }));
+    //
+    // Quick Scan's result COUNT is decided entirely here, by
+    // `showInQuickScan` -- never by a downstream "top 3"/"fill to N" step.
+    // A candidate that fails the quality gate is dropped, however many (or
+    // few) candidates that leaves; genuinely strong candidates are never
+    // truncated below MAX_RESULTS_RETURNED just to hit some target count.
+    const qualifications = deduped.map((c) => ({ candidate: c, qualification: qualifyOpportunity(c) }));
     log.mark("candidate_qualifications", {
-      candidates: qualifications.map(({ candidate, classification }) => ({
+      candidates: qualifications.map(({ candidate, qualification }) => ({
         name: candidate.name,
         type: candidate.type,
         relationshipDirection: candidate.relationshipDirection,
         fitScore: candidate.fitScore,
         evidenceConfidence: candidate.evidenceConfidence,
         potentialRelationship: candidate.potentialRelationship,
-        classification,
+        finalClassification: qualification.finalClassification,
+        showInQuickScan: qualification.showInQuickScan,
+        qualityTier: qualification.qualityTier,
+        exclusionReason: qualification.exclusionReason,
       })),
     });
+    const TIER_RANK: Record<QualityTier, number> = { strong: 2, good: 1, weak: 0 };
     const potentialPartners = qualifications
-      .filter(({ classification }) => classification === "potential_partner")
+      .filter(({ qualification }) => qualification.showInQuickScan)
+      .sort(
+        (a, b) =>
+          TIER_RANK[b.qualification.qualityTier] - TIER_RANK[a.qualification.qualityTier] ||
+          b.candidate.fitScore - a.candidate.fitScore
+      )
       .map(({ candidate }) => candidate);
     const excludedAsIntelligence = deduped.length - potentialPartners.length;
 

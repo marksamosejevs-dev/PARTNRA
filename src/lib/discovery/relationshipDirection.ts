@@ -44,21 +44,28 @@ const CONSUMER_AFFILIATE_AUDIENCE = /\bpromo code\b|\bdiscount code\b|\bcommissi
 const PROFESSIONAL_REFERRAL_AUDIENCE =
   /\b(qualifying )?(professional firms|law firms|accounting firms|consultanc(?:y|ies)|advisory firms|corporate service providers)\b/i;
 
-// "Bet365's affiliate program" -- a THIRD PARTY's program being described,
-// not the resolved entity's own. Captured so the brand name can be
-// compared against the entity's own name below.
-const THIRD_PARTY_POSSESSIVE_BRAND = /\b([A-Z][a-zA-Z0-9&]{2,})'s (affiliate|partner|referral) program\b/;
+// "Bet365's affiliate program" / "Apollo Peptide Sciences' affiliate
+// program" -- a THIRD PARTY's program being described, not the resolved
+// entity's own. Captured so the brand name can be compared against the
+// entity's own name below. Supports a multi-word brand name (up to 3 extra
+// capitalized words) and both the possessive "'s" and the plain trailing
+// apostrophe used after a name already ending in "s".
+const THIRD_PARTY_POSSESSIVE_BRAND =
+  /\b([A-Z][a-zA-Z0-9&]*(?:\s[A-Z][a-zA-Z0-9&]*){0,3})'s? (affiliate|partner|referral) program\b/;
 
 // Educational/software-marketing content ABOUT the general concept of
 // referral/affiliate/partner programs -- "learn to leverage a financial
-// services partner program", "software to manage your affiliate program".
-// This entity's own business is providing tooling/content for OTHER
-// businesses' programs, not performing (or even having) one itself, and
-// isn't necessarily about any one named third-party brand either (so
-// THIRD_PARTY_POSSESSIVE_BRAND alone wouldn't catch it) -- still evidence,
-// not an active relationship.
+// services partner program", "software to manage your affiliate program",
+// or an infrastructure/SaaS provider that literally POWERS another named
+// brand's program ("Conves powers Apollo Peptide Sciences' affiliate
+// program"). This entity's own business is providing tooling/technology/
+// content for OTHER businesses' programs, not performing (or even having)
+// one itself -- and this catches that even when a specific third-party
+// brand IS named (THIRD_PARTY_POSSESSIVE_BRAND below is a narrower,
+// brand-name-specific backstop for cases this misses). Still evidence, not
+// an active relationship.
 const SOFTWARE_OR_EDUCATIONAL_PROGRAM_CONTENT =
-  /\b(learn (?:to|how)|guide to|how to (?:build|create|run|start|set up)|manage your|track your|automate your|software for|platform for|solution for|leverage a)\b.{0,50}\b(referral|affiliate|partner)\s+program/i;
+  /\b(learn (?:to|how)|guide to|how to (?:build|create|run|start|set up)|manage your|track your|automate your|software for|platform for|solution for|leverage a|powers?|provides? the (?:technology|platform|software) for|the technology behind)\b.{0,50}\b(referral|affiliate|partner)\s+program/i;
 
 // A B2B invitation phrased as "opportunities" rather than "program" --
 // common fintech/ecosystem partner marketing copy ("from referral
@@ -82,6 +89,14 @@ const NETWORK_OPERATOR_LANGUAGE =
 // manufacturing one's own product.
 const DISTRIBUTOR_CHANNEL_SIGNALS =
   /\b(import(?:er|s|ed)?|authorized dealer|represents? (?:multiple|various|several)|distributor for|wholesale distributor of (?:multiple|various)|sources? from (?:multiple|various) suppliers|seeking suppliers|multi-?brand)\b/i;
+
+// A marketplace/sourcing-platform posting where buyers are actively
+// looking to PURCHASE this category of product (buy requests, RFQs,
+// sourcing/import inquiries) -- a real channel/buyer-discovery opportunity
+// distinct from a comparable seller. Generic marketplace/B2B-sourcing
+// language, not tied to any one industry.
+const BUYER_DISCOVERY_SIGNALS =
+  /\b(buy request(?:s)?|buyer inquir(?:y|ies)|buying inquir(?:y|ies)|sourcing request(?:s)?|request for quote|\brfq\b|looking to buy|wanted to buy|buyer(?:s)? seeking|import inquir(?:y|ies)|purchase inquir(?:y|ies))\b/i;
 
 // "We manufacture/produce/supply/sell" with no distribution signal above --
 // a same-role competitor/comparable supplier, not evidence of channel fit.
@@ -144,6 +159,7 @@ export function detectRelationshipDirection(item: SourceItem, resolvedEntityName
   }
 
   if (DISTRIBUTOR_CHANNEL_SIGNALS.test(text)) return "distributes_brand";
+  if (BUYER_DISCOVERY_SIGNALS.test(text)) return "buys_product";
   if (SELF_SUPPLY_ONLY_SIGNALS.test(text) && !DISTRIBUTOR_CHANNEL_SIGNALS.test(text)) return "supplies_product";
 
   return "unknown";

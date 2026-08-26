@@ -117,7 +117,13 @@ export function DiscoveryScanner() {
     setErrorMsg("");
   }
 
-  const shown: Candidate[] = result?.candidates.slice(0, 3) ?? [];
+  // The backend already returns only candidates that passed the final
+  // quality gate (see qualification.ts's qualifyOpportunity), sorted best
+  // first, and already capped at a sane Quick Scan maximum -- there is no
+  // "top 3" here. Showing the FULL returned list, whatever its length (0
+  // to that cap), is what makes result count genuinely reflect quality
+  // instead of an artificial display truncation.
+  const shown: Candidate[] = result?.candidates ?? [];
   const moreCount = result ? Math.max(result.totalFound - shown.length, 0) : 0;
   const strongCount = result?.candidates.filter((c) => c.signalStrength === "strong").length ?? 0;
 

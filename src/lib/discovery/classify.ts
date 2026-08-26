@@ -1,5 +1,5 @@
 import { CandidateType, ClassifiedResult, RelationshipDirection, SourceItem } from "./types";
-import { resolveEntity, computeFitScore, evidenceConfidenceLabel, classifyPartnerType } from "./entity";
+import { resolveEntity, computeFitScore, evidenceConfidenceLabel, classifyPartnerType, assessMarketFit } from "./entity";
 import { detectRelationshipDirection, applyRelationshipDirection } from "./relationshipDirection";
 
 export class ClassifierError extends Error {}
@@ -154,18 +154,27 @@ function hasSufficientEvidence(source: SourceItem | undefined): boolean {
   return !!source.snippet && `${source.title} ${source.snippet}`.trim().length >= 20;
 }
 
+/** Bundled so callers adding a new cross-cutting input (this session added `market`) don't need to keep growing a positional parameter list. */
+export interface CandidateFieldOptions {
+  intent?: PartnerTypeIntent;
+  /** The scanning business's own stated market/geography (see BusinessContext.market) -- fed into assessMarketFit, never guessed here. */
+  market?: string | null;
+}
+
 function buildCandidateFields(
   source: SourceItem | undefined,
   signalStrength: "strong" | "medium" | "potential",
   verified: boolean,
   presumedDirection: RelationshipDirection,
-  intent?: PartnerTypeIntent
+  options?: CandidateFieldOptions
 ) {
   const entity = source
     ? resolveEntity(source)
     : { name: null, profileUrl: null, type: "Other" as const, applicationUrl: null };
   const relationshipDirection = resolveDirection(source, entity.name, presumedDirection);
   const evidenceSufficient = hasSufficientEvidence(source);
+  const evidenceText = source ? `${source.title} ${source.snippet}` : "";
+  const marketFit = assessMarketFit(evidenceText, options?.market ?? null);
 
   const base = {
     name: entity.name,
@@ -181,10 +190,11 @@ function buildCandidateFields(
       type: entity.type,
       sourceCount: 1,
       hasApplicationRoute: !!entity.applicationUrl,
-      prioritizedTypes: intent?.prioritized,
-      deprioritizedTypes: intent?.deprioritized,
+      prioritizedTypes: options?.intent?.prioritized,
+      deprioritizedTypes: options?.intent?.deprioritized,
       relationshipDirection,
       hasSufficientEvidence: evidenceSufficient,
+      marketFit,
     }),
     // Cross-candidate templated/doorway-network detection can only run once
     // the full pool is assembled -- see dedupe.ts's flagDuplicateEvidenceNetworks,
@@ -288,7 +298,7 @@ export async function classifyResults(
         // competitor" by construction -- the only thing left to check is
         // whether the evidence text ALSO shows an explicit reverse-
         // direction signal (see resolveDirection) that should override it.
-        ...buildCandidateFields(source, signalStrength, verified, "promotes_brand", intent),
+        ...buildCandidateFields(source, signalStrength, verified, "promotes_brand", { intent, market: businessContext.market }),
       };
     })
     .filter((item) => item.sourceUrl);
@@ -454,7 +464,7 @@ export async function classifyCategoryResults(
         promoCode: null,
         confidence: typeof item.confidence === "number" ? item.confidence : 0,
         reason: typeof item.reason === "string" ? item.reason : "",
-        ...buildCandidateFields(source, signalStrength, verified, presumedDirection, intent),
+        ...buildCandidateFields(source, signalStrength, verified, presumedDirection, { intent, market: businessContext.market }),
       };
     })
     .filter((item): item is ClassifiedResult => item !== null && !!item.sourceUrl);
@@ -541,11 +551,12 @@ function significantWords(phrase: string): string[] {
     .map(singularize);
 }
 
-export function scoreUnverified(
-  items: SourceItem[],
-  categoryPhrases: string[] = [],
-  intent?: PartnerTypeIntent
-): ClassifiedResult[] {
+export interface ScoreUnverifiedOptions extends CandidateFieldOptions {
+  categoryPhrases?: string[];
+}
+
+export function scoreUnverified(items: SourceItem[], options: ScoreUnverifiedOptions = {}): ClassifiedResult[] {
+  const categoryPhrases = options.categoryPhrases ?? [];
   const phraseWordSets = categoryPhrases.map(significantWords).filter((words) => words.length > 0);
 
   return items.map((item) => {
@@ -590,7 +601,7 @@ export function scoreUnverified(
           : "Not yet AI-verified — surfaced by search, shown as a lower-confidence lead pending full evidence review.",
       // No AI-confirmed relationship to default to here -- pure text
       // detection decides the direction, or it stays honestly "unknown".
-      ...buildCandidateFields(item, signalStrength, verified, "unknown", intent),
+      ...buildCandidateFields(item, signalStrength, verified, "unknown", options),
     };
   });
 }
@@ -606,12 +617,8 @@ export function scoreUnverified(
  * is "surface real signal AI didn't confirm", not "show literally
  * everything discovered".
  */
-export function scoreUnverifiedIfSignal(
-  items: SourceItem[],
-  categoryPhrases: string[] = [],
-  intent?: PartnerTypeIntent
-): ClassifiedResult[] {
-  return scoreUnverified(items, categoryPhrases, intent).filter((r) => r.confidence > 27);
+export function scoreUnverifiedIfSignal(items: SourceItem[], options: ScoreUnverifiedOptions = {}): ClassifiedResult[] {
+  return scoreUnverified(items, options).filter((r) => r.confidence > 27);
 }
 
 /**
