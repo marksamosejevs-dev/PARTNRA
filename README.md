@@ -229,3 +229,50 @@ push your changes to GitHub — Netlify picks them up automatically.
   webhook events
 - `src/app/subscribed/page.tsx` — the post-checkout success page (verifies
   payment with Stripe directly before showing "Welcome to PARTNRA")
+
+## 9. Deep Discovery (optional, persisted background research)
+
+Quick Scan (above) is fast and synchronous. Deep Discovery is a separate,
+optional layer that researches a market in the background — expanding
+comparable brands, tracing who actually promotes/distributes/refers to
+them, and persisting everything it verifies into a "Partnership Graph" so
+future scans start smarter. It is entirely additive: without the env vars
+below, Quick Scan works exactly as before and the "Search deeper" CTA
+quietly doesn't appear.
+
+**Setup:**
+1. Create a project at [supabase.com](https://supabase.com/dashboard).
+2. Apply the SQL files in `supabase/migrations/` **in numeric order** — via
+   the Supabase CLI (`supabase db push`) or by pasting each file's contents
+   into the SQL editor.
+3. Add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (Project Settings →
+   API — the **service role** key, not the anon key) to `.env.local` and to
+   Netlify's environment variables. See `.env.example` for details.
+4. Deep Discovery's background worker
+   (`netlify/functions/deep-discovery-worker.ts`) is a Netlify Scheduled
+   Function that fires every minute to advance queued work — confirm your
+   Netlify plan supports Scheduled Functions. If a Deep Discovery scan
+   appears to hang at 0 progress, check whether this function is deployed
+   and firing in Netlify's Functions log.
+
+**Structure:**
+- `supabase/migrations/` — the Partnership Graph's schema (businesses,
+  brands, entities, relationships, evidence, opportunities, scans,
+  discovery_jobs) plus a few atomic upsert/counter Postgres functions.
+- `src/lib/graph/` — the typed data-access layer (the only code that talks
+  to Supabase directly).
+- `src/lib/deepDiscovery/` — the research pipeline itself: comparable-brand
+  expansion, one-hop relationship discovery, cross-brand entity expansion,
+  contact enrichment, Fit V2 (Quick Scan's own Fit plus cross-brand
+  corroboration), preview-candidate selection, and the job-queue worker.
+  It reuses Quick Scan's classification/qualification/geographic-fit logic
+  from `src/lib/discovery/` rather than duplicating it.
+- `src/app/api/deep-discovery/start` / `.../status/[scanId]` — the two thin
+  Route Handlers the frontend calls; almost all real work happens in the
+  scheduled worker, not in these requests.
+- `src/components/ui/DeepDiscoveryPanel.tsx` — the "Search deeper" CTA and
+  progress/preview UI, rendered inside `DiscoveryScanner.tsx`.
+
+There is no importer wired up yet for a seed dataset (e.g. a
+`partnra_seed_database_v1.xlsx`) — if you have one, it isn't present in
+this repository, so nothing here has attempted to load it.

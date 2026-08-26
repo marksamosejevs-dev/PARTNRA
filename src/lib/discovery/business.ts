@@ -3,6 +3,7 @@ import { raceValueWithTimeout, StageTimeoutError } from "./timeout";
 import { ScanLogger } from "./scanLogger";
 import { fetchBusinessContextFromOpenAI } from "./sources/openai";
 import { CANDIDATE_TYPES, CandidateType } from "./types";
+import { BusinessContext, PartnerTypeIntent } from "./classify";
 
 export class BusinessAnalysisError extends Error {}
 
@@ -457,4 +458,30 @@ export async function identifyBusiness(
 
 export function isBusinessAnalysisConfigured(): boolean {
   return !!process.env.ANTHROPIC_API_KEY;
+}
+
+/**
+ * Pure mappers from the full BusinessProfile to the smaller shapes
+ * classify.ts's classification functions actually need. Moved here (from
+ * route.ts, where they were private) so Deep Discovery can read the exact
+ * same Partner Intent Profile the same way Quick Scan does, rather than
+ * duplicating this mapping and risking the two drifting apart. Zero
+ * behavior change -- route.ts now imports these instead of defining them
+ * locally.
+ */
+export function buildBusinessContext(profile: BusinessProfile): BusinessContext {
+  return {
+    category: profile.category,
+    businessModel: profile.businessModel,
+    targetCustomers: profile.targetCustomers,
+    market: profile.market,
+    commercialIntentConcepts: profile.commercialIntentConcepts,
+  };
+}
+
+export function buildPartnerTypeIntent(profile: BusinessProfile): PartnerTypeIntent {
+  return {
+    prioritized: new Set(profile.prioritizedPartnerTypes),
+    deprioritized: new Set(profile.deprioritizedPartnerTypes),
+  };
 }

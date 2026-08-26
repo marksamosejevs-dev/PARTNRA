@@ -3,6 +3,22 @@ import { buildSearchQueries, buildCategoryQueries } from "../queries";
 
 export class SearchProviderError extends Error {}
 
+/**
+ * A generic entry point onto the same Serper query runner discoverFromWeb
+ * already uses internally -- for callers with their own already-built
+ * query strings (e.g. Deep Discovery's entity-expansion "does entity X
+ * also show evidence of Y" search) rather than the brand/category-shaped
+ * queries buildSearchQueries/buildCategoryQueries generate. Same honest
+ * "throws only if EVERY query failed" contract.
+ */
+export async function discoverFromQueries(queries: string[], signal: AbortSignal): Promise<SourceItem[]> {
+  const apiKey = process.env.SERPER_API_KEY;
+  if (!apiKey) throw new SearchProviderError("SERPER_API_KEY is not configured");
+  const provider = (process.env.SEARCH_PROVIDER || "serper").toLowerCase();
+  if (provider !== "serper") throw new SearchProviderError(`Unknown SEARCH_PROVIDER "${provider}"`);
+  return runSerperQueries(queries, apiKey, signal);
+}
+
 async function runSerperQueries(queries: string[], apiKey: string, signal: AbortSignal): Promise<SourceItem[]> {
   const settled = await Promise.allSettled(queries.map((q) => searchSerper(q, apiKey, signal)));
 

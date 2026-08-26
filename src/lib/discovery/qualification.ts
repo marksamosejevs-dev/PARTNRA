@@ -68,11 +68,22 @@ function isGenericPlatformName(name: string): boolean {
  * SEPARATE gate so a high Fit number built on thin evidence still can't
  * reach STRONG or even GOOD.
  */
-function qualityTierFor(candidate: Candidate): QualityTier {
-  if (candidate.evidenceConfidence === "weak") return "weak";
-  if (candidate.fitScore >= 68 && candidate.evidenceConfidence === "strong") return "strong";
-  if (candidate.fitScore >= 50) return "good";
+/**
+ * Exported (as primitives, not a Candidate-shaped signature) so Deep
+ * Discovery's own Fit V2 (see src/lib/deepDiscovery/fitV2.ts) can classify
+ * its own recomputed fit number against the SAME STRONG/GOOD/WEAK
+ * thresholds Quick Scan uses, rather than drifting to a second set of
+ * breakpoints.
+ */
+export function qualityTierForFit(fitScore: number, evidenceConfidence: Candidate["evidenceConfidence"]): QualityTier {
+  if (evidenceConfidence === "weak") return "weak";
+  if (fitScore >= 68 && evidenceConfidence === "strong") return "strong";
+  if (fitScore >= 50) return "good";
   return "weak";
+}
+
+function qualityTierFor(candidate: Candidate): QualityTier {
+  return qualityTierForFit(candidate.fitScore, candidate.evidenceConfidence);
 }
 
 export function qualifyOpportunity(candidate: Candidate): Qualification {
@@ -139,8 +150,10 @@ export function qualifyOpportunity(candidate: Candidate): Qualification {
 // affiliates, documents someone else's program, or is just another
 // supplier of the same thing) is never an acceptable preview, however
 // plausible the rest of it looks -- the preview must be something the
-// user could actually pursue.
-const PREVIEW_INELIGIBLE_DIRECTIONS = new Set<RelationshipDirection>([
+// user could actually pursue. Exported so Deep Discovery's own preview
+// selection (src/lib/deepDiscovery/preview.ts) applies the SAME hard
+// exclusion, rather than a second, driftable list.
+export const PREVIEW_INELIGIBLE_DIRECTIONS = new Set<RelationshipDirection>([
   "operates_affiliate_program",
   "recruits_affiliates",
   "publishes_about",

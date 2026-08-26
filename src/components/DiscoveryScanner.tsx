@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import { Arrow } from "./ui/Arrow";
 import { EvidenceCard } from "./ui/EvidenceCard";
+import { DeepDiscoveryPanel } from "./ui/DeepDiscoveryPanel";
 import { normalizeBrandUrl } from "@/lib/discovery/domain";
 import type { Candidate, DiscoverErrorResponse, DiscoverResponse } from "@/lib/discovery/types";
 
@@ -215,6 +216,11 @@ export function DiscoveryScanner() {
             Try another website
             <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
           </button>
+          {result && !result.mock && (
+            <div className="mt-4 text-left">
+              <DeepDiscoveryPanel domain={result.domain} />
+            </div>
+          )}
         </div>
       )}
 
@@ -278,6 +284,8 @@ export function DiscoveryScanner() {
               <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
             </a>
           </div>
+
+          {!result.mock && <DeepDiscoveryPanel domain={result.domain} />}
         </div>
       )}
     </div>

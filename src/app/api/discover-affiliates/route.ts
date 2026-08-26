@@ -26,7 +26,8 @@ import {
   identifyBusiness,
   isBusinessAnalysisConfigured,
   BusinessAnalysisError,
-  BusinessProfile,
+  buildBusinessContext,
+  buildPartnerTypeIntent,
 } from "@/lib/discovery/business";
 import { resolveCompetitorDomain, ResolvedCompetitor } from "@/lib/discovery/competitors";
 import { fetchCategoryPool, classifyCategoryPool, StrategyFunnel } from "@/lib/discovery/categoryDiscovery";
@@ -34,23 +35,8 @@ import { raceWithTimeout, withFallback, raceValueWithTimeout, StageTimeoutError 
 import { createScanLogger } from "@/lib/discovery/scanLogger";
 import { DiscoverResponse, SourceItem, ClassifiedResult } from "@/lib/discovery/types";
 import { qualifyOpportunity, selectPreviewFallbackCandidate, QualityTier } from "@/lib/discovery/qualification";
-
-function buildBusinessContext(profile: BusinessProfile): BusinessContext {
-  return {
-    category: profile.category,
-    businessModel: profile.businessModel,
-    targetCustomers: profile.targetCustomers,
-    market: profile.market,
-    commercialIntentConcepts: profile.commercialIntentConcepts,
-  };
-}
-
-function buildPartnerTypeIntent(profile: BusinessProfile): PartnerTypeIntent {
-  return {
-    prioritized: new Set(profile.prioritizedPartnerTypes),
-    deprioritized: new Set(profile.deprioritizedPartnerTypes),
-  };
-}
+import { isGraphConfigured } from "@/lib/graph/client";
+import { upsertBusiness } from "@/lib/graph/repository";
 
 // NOTE on Instagram/TikTok (Apify): deliberately NOT wired into this route.
 // Apify's synchronous run-sync-get-dataset-items endpoint is the confirmed
@@ -86,6 +72,11 @@ const COMPETITOR_RESOLVE_TIMEOUT_MS = 3_500;
 const SOURCE_TIMEOUT_MS = 5_000;
 const CLASSIFY_TIMEOUT_MS = 6_000;
 const ENRICH_TIMEOUT_MS = 3_500;
+// Deep Discovery reusing this scan's already-computed Partner Intent
+// Profile (rather than re-running business analysis) is the whole point
+// of this write -- but it must never meaningfully slow down Quick Scan
+// itself, so it's tightly bounded and its failure is always swallowed.
+const GRAPH_PERSIST_TIMEOUT_MS = 2_000;
 
 // Kept at 1 for now: competitors already run in parallel with each other,
 // but real-world provider concurrency/rate limits don't always behave like
@@ -452,6 +443,32 @@ export async function POST(request: NextRequest) {
       deprioritizedPartnerTypes: profile.deprioritizedPartnerTypes,
       commercialIntentConcepts: profile.commercialIntentConcepts,
     });
+
+    // Best-effort persistence of the Partner Intent Profile just computed,
+    // so Deep Discovery (if the user starts it) reuses THIS exact analysis
+    // rather than re-running business identification -- see Deep
+    // Discovery's own worker.ts loadProfile(). Bounded to a couple of
+    // seconds and never allowed to fail or slow down Quick Scan itself:
+    // when the Partnership Graph isn't configured (isGraphConfigured()),
+    // or this write fails/times out, Quick Scan proceeds exactly as before.
+    if (isGraphConfigured()) {
+      await withFallback(
+        () =>
+          upsertBusiness({
+            domain,
+            name: brand,
+            category: profile.category,
+            businessModel: profile.businessModel,
+            targetMarket: profile.market,
+            targetCustomers: profile.targetCustomers,
+            salesModel: profile.salesModel,
+            partnerIntentProfile: profile as unknown as Record<string, unknown>,
+          }),
+        GRAPH_PERSIST_TIMEOUT_MS,
+        "graph business upsert",
+        null
+      ).catch(() => null);
+    }
 
     // Category/product-signal search is kicked off now, concurrently with
     // competitor resolution below -- it doesn't depend on which competitors

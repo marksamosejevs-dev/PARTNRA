@@ -1,0 +1,221 @@
+import { discoverFromWeb } from "../discovery/sources/web";
+import { discoverFromOpenAI } from "../discovery/sources/openai";
+import { discoverFromYoutube } from "../discovery/sources/youtube";
+import {
+  classifyResults,
+  scoreUnverified,
+  sampleAcrossSources,
+  MAX_CLASSIFY_INPUT,
+  BusinessContext,
+  PartnerTypeIntent,
+} from "../discovery/classify";
+import { dedupeCandidates } from "../discovery/dedupe";
+import { flagCompetitorOwnedInfrastructure, isSameRegistrableDomain, assessGeographicFit } from "../discovery/entity";
+import { qualifyOpportunity } from "../discovery/qualification";
+import { SourceItem, ClassifiedResult, Candidate } from "../discovery/types";
+import { withFallback, raceWithTimeout } from "../discovery/timeout";
+import { computeDeepFitScore, deepQualityTier } from "./fitV2";
+import { DEEP_DISCOVERY_LIMITS } from "./limits";
+import {
+  upsertEntity,
+  upsertRelationship,
+  upsertEvidence,
+  upsertOpportunity,
+  countDistinctBrandsForEntity,
+} from "../graph/repository";
+import { BrandRow } from "../graph/types";
+
+/**
+ * The "one relationship hop deeper" (Section 10): given a resolved
+ * comparable Brand, discover WHO actually promotes/distributes/resells/
+ * refers to it -- reusing the EXACT same discovery+classification+dedup+
+ * qualification pipeline Quick Scan already uses for its one resolved
+ * competitor (discoverFromWeb/OpenAI/YouTube -> classifyResults ->
+ * dedupeCandidates -> qualifyOpportunity), just run per-brand across many
+ * more brands, in the background, with more generous timeouts. Deep
+ * Discovery NEVER re-implements this classification logic separately --
+ * that would risk silently drifting from Quick Scan's own quality bar,
+ * exactly what the regression-protected-baseline rule forbids.
+ */
+
+const SOURCE_TIMEOUT_MS = 8_000;
+const CLASSIFY_TIMEOUT_MS = 10_000;
+
+function hostnameOf(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "");
+  } catch {
+    return null;
+  }
+}
+
+export interface BrandExpansionResult {
+  itemsSearched: number;
+  entitiesUpserted: number;
+  relationshipsUpserted: number;
+  opportunitiesUpserted: number;
+  /** Entity ids that got a fresh Opportunity from THIS run -- what worker.ts uses to decide which entities are worth a bounded entity-expansion / contact-enrichment follow-up job (never every touched entity, only ones already worth showing). */
+  opportunityEntityIds: string[];
+  warnings: string[];
+}
+
+export async function expandBrandRelationships(params: {
+  businessId: string;
+  brand: BrandRow;
+  businessContext: BusinessContext;
+  intent: PartnerTypeIntent;
+  signal: AbortSignal;
+}): Promise<BrandExpansionResult> {
+  const { businessId, brand, businessContext, intent, signal } = params;
+  const warnings: string[] = [];
+  const concepts = businessContext.commercialIntentConcepts;
+  const brandDomain = brand.domain ?? "";
+
+  const [webResult, openaiResult, youtubeResult] = await Promise.all([
+    withFallback((s) => discoverFromWeb(brand.name, brandDomain, s, concepts), SOURCE_TIMEOUT_MS, `web (${brandDomain})`, [] as SourceItem[]),
+    withFallback((s) => discoverFromOpenAI(brand.name, s, concepts), SOURCE_TIMEOUT_MS, `openai (${brandDomain})`, [] as SourceItem[]),
+    withFallback((s) => discoverFromYoutube(brand.name, s, concepts), SOURCE_TIMEOUT_MS, `youtube (${brandDomain})`, [] as SourceItem[]),
+  ]);
+  const combined: SourceItem[] = [...webResult, ...openaiResult, ...youtubeResult];
+
+  const pool: SourceItem[] = [];
+  const seenUrls = new Set<string>();
+  for (const item of combined) {
+    const host = hostnameOf(item.url);
+    if (!host) continue;
+    if (brandDomain && isSameRegistrableDomain(host, brandDomain)) continue;
+    if (seenUrls.has(item.url)) continue;
+    seenUrls.add(item.url);
+    pool.push(item);
+    if (pool.length >= DEEP_DISCOVERY_LIMITS.maxSearchResultsPerBrand) break;
+  }
+
+  if (pool.length === 0) {
+    return { itemsSearched: combined.length, entitiesUpserted: 0, relationshipsUpserted: 0, opportunitiesUpserted: 0, opportunityEntityIds: [], warnings };
+  }
+
+  const classifyInput = sampleAcrossSources(pool, Math.min(MAX_CLASSIFY_INPUT, DEEP_DISCOVERY_LIMITS.maxEntitiesSentToAiVerificationPerBrand));
+  const overflow = pool.filter((i) => !classifyInput.includes(i));
+  const categoryPhrases = [businessContext.category, ...concepts].filter((p): p is string => !!p);
+
+  let classified: ClassifiedResult[];
+  try {
+    classified = await raceWithTimeout(
+      (s) => classifyResults(classifyInput, brand.name, brandDomain, businessContext, s, intent),
+      CLASSIFY_TIMEOUT_MS,
+      `classify (${brandDomain})`,
+      signal
+    );
+  } catch (err) {
+    // One provider/model failure must not kill the whole job -- degrade to
+    // the same deterministic, honestly-unverified fallback Quick Scan uses,
+    // over the FULL pool (never just drop what didn't reach the AI call).
+    warnings.push(`AI classification failed/timed out for ${brand.name}: ${err instanceof Error ? err.message : String(err)}`);
+    classified = scoreUnverified(pool, { intent, market: businessContext.market, businessModel: businessContext.businessModel });
+  }
+  // Overflow items never sent to the AI classifier still get an honest,
+  // clearly-unverified deterministic score -- real discovered signal is
+  // never simply discarded.
+  if (overflow.length > 0) {
+    classified = [
+      ...classified,
+      ...scoreUnverified(overflow, { categoryPhrases, intent, market: businessContext.market, businessModel: businessContext.businessModel }),
+    ];
+  }
+
+  let deduped = dedupeCandidates(classified, intent, businessContext.market, businessContext.businessModel);
+  if (brandDomain) {
+    deduped = flagCompetitorOwnedInfrastructure(deduped, { name: brand.name, domain: brandDomain });
+  }
+
+  let entitiesUpserted = 0;
+  let relationshipsUpserted = 0;
+  let opportunitiesUpserted = 0;
+  const opportunityEntityIds: string[] = [];
+
+  for (const candidate of deduped) {
+    if (!candidate.name || !candidate.type) continue; // no resolvable entity identity -- never persisted as a "partner" (see qualification.ts's own identical rule)
+
+    try {
+      const entityDomain = hostnameOf(candidate.profileUrl) ?? hostnameOf(candidate.sourceUrl);
+      const entity = await upsertEntity({
+        name: candidate.name,
+        domain: entityDomain,
+        entityType: candidate.type,
+        primaryRole: candidate.type,
+        applicationUrl: candidate.applicationUrl,
+        metadata: { lastEvidenceSample: candidate.evidence.slice(0, 500) },
+      });
+      entitiesUpserted++;
+
+      const relationship = await upsertRelationship({
+        sourceEntityId: entity.id,
+        targetBrandId: brand.id,
+        relationshipType: candidate.relationshipDirection,
+        relationshipDirection: candidate.relationshipDirection,
+        signalStrength: candidate.signalStrength,
+        confidence: candidate.confidence,
+        verified: candidate.verified,
+      });
+      relationshipsUpserted++;
+
+      await upsertEvidence({
+        relationshipId: relationship.id,
+        entityId: entity.id,
+        brandId: brand.id,
+        url: candidate.sourceUrl,
+        sourcePlatform: candidate.platform,
+        snippet: candidate.evidence,
+        evidenceType: candidate.evidenceType ?? undefined,
+        evidenceConfidence: candidate.evidenceConfidence,
+      });
+
+      // ONE canonical qualification gate -- the SAME qualifyOpportunity
+      // Quick Scan uses, never bypassed. Competitor-owned infrastructure,
+      // an evidence source, or a comparable business without a real
+      // potentialRelationship never becomes an Opportunity here either
+      // (Section 29: a brand operating its own program is intelligence,
+      // not automatically a lead) -- it's still persisted as an
+      // Entity+Relationship+Evidence above (real graph intelligence), just
+      // never surfaced as something to contact.
+      const qualification = qualifyOpportunity(candidate as Candidate);
+      if (qualification.finalClassification !== "potential_partner") continue;
+      // A templated/doorway SEO-network member (see dedupe.ts's
+      // flagDuplicateEvidenceNetworks) is still real graph intelligence --
+      // the entity/relationship/evidence above are kept -- but never
+      // becomes an Opportunity a user would be pointed at.
+      if (candidate.similarEvidenceNetwork) continue;
+
+      const distinctBrandCount = await countDistinctBrandsForEntity(entity.id);
+      const geographicFit = assessGeographicFit(candidate.evidence, businessContext.market);
+      const deepFit = computeDeepFitScore({
+        baseFitScore: candidate.fitScore,
+        distinctBrandCount,
+        evidenceCount: candidate.sourceCount,
+      });
+      const tier = deepQualityTier(deepFit, candidate.evidenceConfidence);
+
+      await upsertOpportunity({
+        businessId,
+        entityId: entity.id,
+        partnerType: candidate.type,
+        primaryRole: candidate.type,
+        potentialRelationship: candidate.potentialRelationship,
+        relationshipDirection: candidate.relationshipDirection,
+        geographicFit,
+        partnraFit: deepFit,
+        evidenceConfidence: candidate.evidenceConfidence,
+        recruitability: "recruitable",
+        actionability: candidate.applicationUrl ? "application_route_found" : "no_route_yet",
+        qualityTier: tier,
+      });
+      opportunitiesUpserted++;
+      opportunityEntityIds.push(entity.id);
+    } catch (err) {
+      warnings.push(`persistence failed for candidate "${candidate.name}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return { itemsSearched: combined.length, entitiesUpserted, relationshipsUpserted, opportunitiesUpserted, opportunityEntityIds, warnings };
+}
