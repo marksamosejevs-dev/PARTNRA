@@ -288,21 +288,38 @@ export async function processNextJob(): Promise<{ processed: boolean; jobType?: 
  * No manual Supabase edits, no "Run now" clicking required.
  */
 async function reclaimStaleWork(): Promise<{ requeuedCount: number; failedCount: number }> {
-  const result = await reclaimStaleJobs(DEEP_DISCOVERY_LIMITS.staleJobLeaseSeconds, DEEP_DISCOVERY_LIMITS.maxJobAttempts);
-  // A job permanently failing here (attempts exhausted) may have been the
-  // last thing blocking its scan from finalizing -- maybeFinalizeScan is
-  // otherwise only ever called right after processing a job, so a scan
-  // whose only remaining job died via stale-reclaim (not via a normal
-  // dispatchJob failure) would never get re-checked without this.
-  for (const scanId of result.failedScanIds) {
-    try {
-      await maybeFinalizeScan(scanId);
-    } catch {
-      // Best-effort -- the next tick (or the next time any job on this
-      // scan completes) will re-check finalization anyway.
+  // This is a best-effort BONUS on top of the normal claim-and-process loop
+  // below, never a gate on it -- reclaimStaleJobs is a brand-new RPC as of
+  // migration 0005, and a fresh Postgres function can trip a transient
+  // PostgREST schema-cache-not-yet-refreshed error (or any other one-off
+  // RPC/permission hiccup) right after a deploy. Before this try/catch
+  // existed, that error propagated out of runWorkerTick BEFORE it ever
+  // reached the claim loop, meaning a single failing reclaim call silently
+  // stopped ALL normal job processing too -- a worse outcome than the
+  // orphaned-job problem this was meant to fix. Logging it (secret-free)
+  // makes a real, persistent failure diagnosable in Netlify's function
+  // logs; a transient one simply succeeds on the next minute's tick.
+  try {
+    const result = await reclaimStaleJobs(DEEP_DISCOVERY_LIMITS.staleJobLeaseSeconds, DEEP_DISCOVERY_LIMITS.maxJobAttempts);
+    // A job permanently failing here (attempts exhausted) may have been the
+    // last thing blocking its scan from finalizing -- maybeFinalizeScan is
+    // otherwise only ever called right after processing a job, so a scan
+    // whose only remaining job died via stale-reclaim (not via a normal
+    // dispatchJob failure) would never get re-checked without this.
+    for (const scanId of result.failedScanIds) {
+      try {
+        await maybeFinalizeScan(scanId);
+      } catch {
+        // Best-effort -- the next tick (or the next time any job on this
+        // scan completes) will re-check finalization anyway.
+      }
     }
+    return { requeuedCount: result.requeuedCount, failedCount: result.failedCount };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(JSON.stringify({ stage: "deep_discovery_stale_reclaim", error: message }));
+    return { requeuedCount: 0, failedCount: 0 };
   }
-  return { requeuedCount: result.requeuedCount, failedCount: result.failedCount };
 }
 
 /** One bounded worker tick -- reclaims any stale jobs, then drains up to maxJobs jobs, then returns. Called by the Netlify Scheduled Function (and safe to call from anywhere else that wants to nudge the queue, e.g. a manual "check now" trigger). */
