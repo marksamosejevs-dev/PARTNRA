@@ -439,6 +439,35 @@ export async function countJobsByStatus(scanId: string): Promise<Record<string, 
   return counts;
 }
 
+export interface StaleJobReclaimResult {
+  requeuedCount: number;
+  failedCount: number;
+  /** Distinct scan ids that had a job permanently fail here -- these may now have no queued/running work left, so the caller re-checks finalization for each. */
+  failedScanIds: string[];
+}
+
+/**
+ * A 'running' job older than the lease (see DEEP_DISCOVERY_LIMITS.staleJobLeaseSeconds)
+ * is assumed orphaned by a dead worker process, never a still-legitimately-running
+ * one -- see reclaim_stale_jobs in supabase/migrations/0005_stale_job_recovery.sql
+ * for why this is safe under concurrent worker ticks (plain atomic UPDATEs, no
+ * SELECT-then-UPDATE race window). Called once per worker tick, before claiming
+ * any new work, so recovery is automatic on the very next scheduled invocation.
+ */
+export async function reclaimStaleJobs(staleAfterSeconds: number, maxAttempts: number): Promise<StaleJobReclaimResult> {
+  const supabase = getGraphClient();
+  const { data, error } = await supabase
+    .rpc("reclaim_stale_jobs", { p_stale_after_seconds: staleAfterSeconds, p_max_attempts: maxAttempts })
+    .single();
+  if (error) throw new GraphError(`reclaimStaleJobs: ${error.message}`);
+  const row = data as { requeued_count: number; failed_count: number; failed_scan_ids: string[] | null };
+  return {
+    requeuedCount: row.requeued_count,
+    failedCount: row.failed_count,
+    failedScanIds: row.failed_scan_ids ?? [],
+  };
+}
+
 /** Bounds cost per Section 35/35 (max entity expansions / contact enrichments per scan) -- checked before enqueueing another job of this type, never after. */
 export async function countJobsByType(scanId: string, jobType: DiscoveryJobType): Promise<number> {
   const supabase = getGraphClient();

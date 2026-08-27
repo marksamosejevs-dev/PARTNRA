@@ -40,12 +40,18 @@ export async function expandEntityAcrossBrands(params: {
   intent: PartnerTypeIntent;
   signal: AbortSignal;
 }): Promise<EntityExpansionResult> {
-  const { entity, candidateBrands, businessContext, intent } = params;
+  const { entity, candidateBrands, businessContext, intent, signal } = params;
   const warnings: string[] = [];
   const brandsToCheck = candidateBrands.slice(0, PER_JOB_BRAND_CHECK_CAP);
   let newRelationshipsFound = 0;
 
   for (const brand of brandsToCheck) {
+    // Job-level budget already exceeded -- stop checking further brands;
+    // relationships already found and persisted above stay persisted.
+    if (signal.aborted) {
+      warnings.push(`stopped early -- job budget exceeded`);
+      break;
+    }
     try {
       const query = `"${entity.name}" "${brand.name}"`;
       const items = await withFallback(

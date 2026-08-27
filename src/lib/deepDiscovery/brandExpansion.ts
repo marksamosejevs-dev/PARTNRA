@@ -168,6 +168,15 @@ export async function expandBrandRelationships(params: {
   const opportunityEntityIds: string[] = [];
 
   for (const candidate of deduped) {
+    // The job-level budget (see worker.ts's JOB_TIMEOUT_MS) has already
+    // elapsed -- stop persisting further candidates and return whatever
+    // real progress was already made, rather than continuing to churn
+    // past the job's own intended budget. Every candidate already
+    // persisted above stays persisted; this just stops adding more.
+    if (signal.aborted) {
+      warnings.push(`stopped early after ${entitiesUpserted} of ${deduped.length} candidates -- job budget exceeded`);
+      break;
+    }
     if (!candidate.name || !candidate.type) continue; // no resolvable entity identity -- never persisted as a "partner" (see qualification.ts's own identical rule)
 
     try {

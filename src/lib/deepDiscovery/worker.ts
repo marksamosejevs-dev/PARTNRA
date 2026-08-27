@@ -9,6 +9,7 @@ import { computeDeepFitScore, deepQualityTier } from "./fitV2";
 import { DEEP_DISCOVERY_LIMITS } from "./limits";
 import {
   claimNextJob,
+  reclaimStaleJobs,
   completeJob,
   failJob,
   getScan,
@@ -277,13 +278,44 @@ export async function processNextJob(): Promise<{ processed: boolean; jobType?: 
   }
 }
 
-/** One bounded worker tick -- drains up to maxJobs jobs, then returns. Called by the Netlify Scheduled Function (and safe to call from anywhere else that wants to nudge the queue, e.g. a manual "check now" trigger). */
-export async function runWorkerTick(maxJobs: number = DEEP_DISCOVERY_LIMITS.maxJobsPerWorkerTick): Promise<{ jobsProcessed: number }> {
+/**
+ * Self-healing step (Section: stale job recovery). Runs before any new job
+ * is claimed, on EVERY tick -- this is what makes recovery automatic: a
+ * Netlify invocation that died mid-job (platform timeout, crash, OOM) left
+ * its claimed row in 'running' with nothing else ever watching it; the very
+ * next scheduled tick (at most staleJobLeaseSeconds later) notices it via
+ * reclaim_stale_jobs' atomic UPDATEs and requeues or permanently fails it.
+ * No manual Supabase edits, no "Run now" clicking required.
+ */
+async function reclaimStaleWork(): Promise<{ requeuedCount: number; failedCount: number }> {
+  const result = await reclaimStaleJobs(DEEP_DISCOVERY_LIMITS.staleJobLeaseSeconds, DEEP_DISCOVERY_LIMITS.maxJobAttempts);
+  // A job permanently failing here (attempts exhausted) may have been the
+  // last thing blocking its scan from finalizing -- maybeFinalizeScan is
+  // otherwise only ever called right after processing a job, so a scan
+  // whose only remaining job died via stale-reclaim (not via a normal
+  // dispatchJob failure) would never get re-checked without this.
+  for (const scanId of result.failedScanIds) {
+    try {
+      await maybeFinalizeScan(scanId);
+    } catch {
+      // Best-effort -- the next tick (or the next time any job on this
+      // scan completes) will re-check finalization anyway.
+    }
+  }
+  return { requeuedCount: result.requeuedCount, failedCount: result.failedCount };
+}
+
+/** One bounded worker tick -- reclaims any stale jobs, then drains up to maxJobs jobs, then returns. Called by the Netlify Scheduled Function (and safe to call from anywhere else that wants to nudge the queue, e.g. a manual "check now" trigger). */
+export async function runWorkerTick(
+  maxJobs: number = DEEP_DISCOVERY_LIMITS.maxJobsPerWorkerTick
+): Promise<{ jobsProcessed: number; staleRequeued: number; staleFailed: number }> {
+  const stale = await reclaimStaleWork();
+
   let jobsProcessed = 0;
   for (let i = 0; i < maxJobs; i++) {
     const result = await processNextJob();
     if (!result.processed) break;
     jobsProcessed++;
   }
-  return { jobsProcessed };
+  return { jobsProcessed, staleRequeued: stale.requeuedCount, staleFailed: stale.failedCount };
 }

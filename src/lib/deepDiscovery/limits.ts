@@ -17,4 +17,19 @@ export const DEEP_DISCOVERY_LIMITS = {
   /** One bounded worker tick (see netlify/functions/deep-discovery-worker.ts) processes at most this many jobs before returning, so a single invocation can't run indefinitely. */
   maxJobsPerWorkerTick: 8,
   maxJobAttempts: 3,
+  /**
+   * A 'running' discovery_jobs row older than this is assumed orphaned
+   * (the process that claimed it died -- a Netlify function limit, a
+   * crash, an unbounded hang) and is reclaimed by reclaim_stale_jobs()
+   * (see supabase/migrations/0005_stale_job_recovery.sql). Chosen well
+   * above any legitimate job's real duration -- every external
+   * search/classify call is individually bounded to well under a minute
+   * (see discovery/timeout.ts), and every Supabase call now carries its
+   * own SUPABASE_FETCH_TIMEOUT_MS hard timeout (see graph/client.ts) -- so
+   * a genuinely still-running job essentially never crosses this. It's
+   * also well short of "hours": since the worker cron fires every minute,
+   * a truly orphaned job recovers automatically within one lease window of
+   * dying, never requiring manual intervention.
+   */
+  staleJobLeaseSeconds: 300,
 } as const;
