@@ -1,43 +1,98 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { promises as dns } from "dns";
 import { normalizeBrandUrl, deriveBrandName } from "@/lib/discovery/domain";
 import { discoverFromWeb, isWebSearchConfigured, SearchProviderError } from "@/lib/discovery/sources/web";
+import { discoverFromOpenAI } from "@/lib/discovery/sources/openai";
 import { discoverFromYoutube } from "@/lib/discovery/sources/youtube";
-import { discoverFromInstagram } from "@/lib/discovery/sources/instagram";
-import { discoverFromTikTok } from "@/lib/discovery/sources/tiktok";
-import { classifyResults, isClassifierConfigured, ClassifierError } from "@/lib/discovery/classify";
-import { dedupeCandidates } from "@/lib/discovery/dedupe";
+import {
+  classifyResults,
+  scoreUnverified,
+  scoreUnverifiedIfSignal,
+  sampleAcrossSources,
+  isClassifierConfigured,
+  ClassifierError,
+  MAX_CLASSIFY_INPUT,
+  BusinessContext,
+  PartnerTypeIntent,
+} from "@/lib/discovery/classify";
+import { flagCompetitorOwnedInfrastructure, isSameRegistrableDomain } from "@/lib/discovery/entity";
+import { dedupeCandidates, minConfidenceFor } from "@/lib/discovery/dedupe";
 import { enrichContact, isHunterConfigured } from "@/lib/discovery/hunter";
 import { getMockCandidates } from "@/lib/discovery/mock";
 import {
   fetchHomepageText,
+  fetchBusinessContextFromWeb,
   identifyBusiness,
   isBusinessAnalysisConfigured,
   BusinessAnalysisError,
+  buildBusinessContext,
+  buildPartnerTypeIntent,
 } from "@/lib/discovery/business";
 import { resolveCompetitorDomain, ResolvedCompetitor } from "@/lib/discovery/competitors";
-import { raceWithTimeout, withFallback, StageTimeoutError } from "@/lib/discovery/timeout";
+import { fetchCategoryPool, classifyCategoryPool, StrategyFunnel } from "@/lib/discovery/categoryDiscovery";
+import { raceWithTimeout, withFallback, raceValueWithTimeout, StageTimeoutError } from "@/lib/discovery/timeout";
+import { createScanLogger } from "@/lib/discovery/scanLogger";
 import { DiscoverResponse, SourceItem, ClassifiedResult } from "@/lib/discovery/types";
+import { qualifyOpportunity, selectPreviewFallbackCandidate, QualityTier } from "@/lib/discovery/qualification";
+import { isGraphConfigured } from "@/lib/graph/client";
+import { upsertBusiness } from "@/lib/graph/repository";
 
-// Every external call below is individually bounded -- no single slow
-// secondary call (in practice, Apify's synchronous actor-run endpoint) can
-// hang and take the rest of the scan down with it, the way one shared
-// AbortController + Promise.all used to. This outer figure is a last-resort
-// circuit breaker only, sized comfortably above the sum of the stage
-// timeouts below, so it should essentially never fire in normal operation.
-const OVERALL_SAFETY_NET_MS = 55_000;
+// NOTE on Instagram/TikTok (Apify): deliberately NOT wired into this route.
+// Apify's synchronous run-sync-get-dataset-items endpoint is the confirmed
+// bottleneck behind repeated production timeouts -- actor cold starts alone
+// can take longer than this entire route's budget below. There's no job
+// queue/database in this project to genuinely run them out-of-band and
+// enrich results afterward, so rather than keep a fundamentally slow
+// synchronous call in the critical path "with a timeout on it" (which just
+// re-creates the same failure mode with smaller numbers), they're removed
+// from the request path entirely for now. The provider modules themselves
+// (src/lib/discovery/sources/instagram.ts, tiktok.ts) are untouched and
+// ready to be re-attached once background enrichment exists.
+//
+// Every remaining external call below is individually bounded. This outer
+// figure is a last-resort circuit breaker sized to fire BEFORE Netlify's own
+// ~26s hard ceiling on synchronous functions would kill the process outright
+// -- if this fires, the user still gets this route's own honest JSON error
+// instead of a raw platform-level gateway timeout. The margin below 26s is
+// deliberately generous: this in-process timer only starts once our code is
+// already running, after whatever invocation/proxy overhead Netlify itself
+// adds on top, which this route has no visibility into.
+const OVERALL_SAFETY_NET_MS = 20_000;
 
-const HOMEPAGE_FETCH_TIMEOUT_MS = 6_000;
-const BUSINESS_ANALYSIS_TIMEOUT_MS = 9_000;
-const COMPETITOR_RESOLVE_TIMEOUT_MS = 5_000;
-const SOURCE_TIMEOUT_MS = 7_000;
-const CLASSIFY_TIMEOUT_MS = 9_000;
-const ENRICH_TIMEOUT_MS = 5_000;
+const DNS_LOOKUP_TIMEOUT_MS = 3_000;
+const HOMEPAGE_FETCH_TIMEOUT_MS = 4_000;
+// A bit more generous than the other source-timeout budgets: this one
+// fallback call now covers two Serper queries plus an OpenAI web-search
+// round trip (search + synthesize), run in parallel -- and it only ever
+// runs on the homepage-fetch-failure path, not on every scan.
+const BUSINESS_CONTEXT_SEARCH_TIMEOUT_MS = 6_000;
+const BUSINESS_ANALYSIS_TIMEOUT_MS = 7_000;
+const COMPETITOR_RESOLVE_TIMEOUT_MS = 3_500;
+const SOURCE_TIMEOUT_MS = 5_000;
+const CLASSIFY_TIMEOUT_MS = 6_000;
+const ENRICH_TIMEOUT_MS = 3_500;
+// Deep Discovery reusing this scan's already-computed Partner Intent
+// Profile (rather than re-running business analysis) is the whole point
+// of this write -- but it must never meaningfully slow down Quick Scan
+// itself, so it's tightly bounded and its failure is always swallowed.
+const GRAPH_PERSIST_TIMEOUT_MS = 2_000;
 
-const MAX_COMPETITORS = 2;
+// Kept at 1 for now: competitors already run in parallel with each other,
+// but real-world provider concurrency/rate limits don't always behave like
+// the theoretical parallel case, and each additional competitor doubles the
+// classification cost. Quality over quantity while reliability is the
+// priority -- easy to raise once real deployed timings confirm headroom.
+const MAX_COMPETITORS = 1;
 const MAX_CANDIDATE_POOL = 30;
-const MAX_RESULTS_RETURNED = 5;
-const MAX_ENRICHED = 5;
+// Upper bounds only, never a floor -- Quick Scan returns however many
+// candidates genuinely pass qualifyOpportunity's quality gate (see
+// qualification.ts), from zero up to this cap. Raised from the previous
+// 5 so a scan that genuinely finds many strong opportunities isn't
+// arbitrarily truncated, while staying well short of turning Quick Scan
+// into a full lead list.
+const MAX_RESULTS_RETURNED = 8;
+const MAX_ENRICHED = 8;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_MAX = 5;
 
@@ -54,14 +109,16 @@ function isRateLimited(key: string): boolean {
   return hits.length > RATE_LIMIT_MAX;
 }
 
+/** Node's dns.lookup has no AbortSignal support -- bounded explicitly instead of left to hang. */
 async function domainLooksReachable(hostname: string): Promise<boolean> {
   try {
-    await dns.lookup(hostname);
+    await raceValueWithTimeout(dns.lookup(hostname), DNS_LOOKUP_TIMEOUT_MS, "reachability DNS lookup");
     return true;
   } catch (err) {
+    if (err instanceof StageTimeoutError) return true; // transient/slow resolver — don't block the scan on it
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOTFOUND" || code === "ENODATA") return false;
-    return true; // transient resolver issue — don't block the scan on it
+    return true;
   }
 }
 
@@ -74,7 +131,18 @@ function mockModeEnabled(): boolean {
   return process.env.PARTNRA_MOCK_MODE === "true" && process.env.NODE_ENV !== "production";
 }
 
-function emptyResponse(brand: string, domain: string, businessCategory: string | null, competitorsAnalyzed: string[], queriesRun: number): DiscoverResponse {
+function emptyFunnel(): StrategyFunnel {
+  return { totalCandidates: 0, deduplicated: 0, sentToAI: 0, aiClassified: 0, timedOutFallbackScored: 0, rescuedScored: 0, rejectedWeakEvidence: 0 };
+}
+
+function emptyResponse(
+  brand: string,
+  domain: string,
+  profile: { category: string | null; market: string | null; keywords: string[] },
+  competitorsAnalyzed: string[],
+  queriesRun: number,
+  discoveryStrategiesUsed: Array<"competitor" | "category">
+): DiscoverResponse {
   return {
     mock: false,
     brand,
@@ -82,54 +150,82 @@ function emptyResponse(brand: string, domain: string, businessCategory: string |
     queriesRun,
     totalFound: 0,
     candidates: [],
-    businessCategory,
+    businessCategory: profile.category,
+    businessMarket: profile.market,
+    businessKeywords: profile.keywords,
     competitorsAnalyzed,
+    discoveryStrategiesUsed,
   };
 }
 
 /**
- * Runs the full source-discovery + classification pass for one resolved
- * competitor. Each of the four sources is individually time-boxed and
- * gracefully degrades to an empty list rather than rejecting -- only the
- * classification step can still produce a genuine failure, since without it
- * we have nothing to return for this competitor.
+ * Runs source discovery + classification for one resolved competitor. Web,
+ * OpenAI and YouTube each get their own bounded timeout and run in
+ * parallel. Web search (Serper) is the primary source, but its failure is
+ * captured rather than left to reject the surrounding Promise.all -- a
+ * Promise.all rejects as soon as ANY input rejects, which would otherwise
+ * throw away OpenAI/YouTube's results too even when they succeeded. Serper
+ * failing only actually fails this competitor once OpenAI and YouTube also
+ * came back with nothing to offer instead.
  */
 async function discoverForCompetitor(
   competitor: ResolvedCompetitor,
-  parentSignal: AbortSignal
-): Promise<{ classified: ClassifiedResult[]; itemsSearched: number }> {
-  const [webResult, youtube, instagram, tiktok] = await Promise.all([
+  businessContext: BusinessContext,
+  intent: PartnerTypeIntent,
+  parentSignal: AbortSignal,
+  log: ReturnType<typeof createScanLogger>
+): Promise<{ classified: ClassifiedResult[]; itemsSearched: number; funnel: StrategyFunnel }> {
+  log.mark("web_discovery_start", { domain: competitor.domain });
+  log.mark("openai_discovery_start", { domain: competitor.domain });
+  log.mark("youtube_discovery_start", { domain: competitor.domain });
+
+  const concepts = businessContext.commercialIntentConcepts;
+  const [webOutcome, openai, youtube] = await Promise.all([
     raceWithTimeout(
-      (signal) => discoverFromWeb(competitor.name, competitor.domain, signal),
+      (signal) => discoverFromWeb(competitor.name, competitor.domain, signal, concepts),
       SOURCE_TIMEOUT_MS,
       `web search (${competitor.domain})`,
       parentSignal
-    ).catch((err) => {
-      // The required source: a real failure or timeout here is reported
-      // distinctly below, not silently swallowed into "zero results".
-      throw err;
-    }),
+    )
+      .then((items) => ({ ok: true as const, items }))
+      .catch((err) => {
+        log.fail("web_discovery", err, { domain: competitor.domain, provider: "serper" });
+        return { ok: false as const, error: err };
+      }),
     withFallback(
-      (signal) => discoverFromYoutube(competitor.name, signal),
+      (signal) => discoverFromOpenAI(competitor.name, signal, concepts),
+      SOURCE_TIMEOUT_MS,
+      `OpenAI web search (${competitor.domain})`,
+      []
+    ),
+    withFallback(
+      (signal) => discoverFromYoutube(competitor.name, signal, concepts),
       SOURCE_TIMEOUT_MS,
       `YouTube search (${competitor.domain})`,
       []
     ),
-    withFallback(
-      (signal) => discoverFromInstagram(competitor.name, signal),
-      SOURCE_TIMEOUT_MS,
-      `Instagram search (${competitor.domain})`,
-      []
-    ),
-    withFallback(
-      (signal) => discoverFromTikTok(competitor.name, signal),
-      SOURCE_TIMEOUT_MS,
-      `TikTok search (${competitor.domain})`,
-      []
-    ),
   ]);
+  const webResult = webOutcome.ok ? webOutcome.items : [];
+  log.mark("web_discovery_end", {
+    domain: competitor.domain,
+    found: webResult.length,
+    failed: !webOutcome.ok,
+  });
+  log.mark("openai_discovery_end", { domain: competitor.domain, found: openai.length });
+  log.mark("youtube_discovery_end", { domain: competitor.domain, found: youtube.length });
 
-  const combined: SourceItem[] = [...webResult, ...youtube, ...instagram, ...tiktok];
+  const combined: SourceItem[] = [...webResult, ...openai, ...youtube];
+  const funnel = emptyFunnel();
+  funnel.totalCandidates = combined.length;
+
+  if (combined.length === 0) {
+    // Nothing came back from any source for this competitor. If web search
+    // specifically errored (rather than just legitimately finding zero
+    // results) and nothing else filled in either, that's the honest reason
+    // to report -- but only now, once every alternative has had its chance.
+    if (!webOutcome.ok) throw webOutcome.error;
+    return { classified: [], itemsSearched: 0, funnel };
+  }
 
   const pool: SourceItem[] = [];
   const seenUrls = new Set<string>();
@@ -140,28 +236,92 @@ async function discoverForCompetitor(
     } catch {
       continue;
     }
-    if (itemHost === competitor.domain) continue; // the competitor's own site, not a partner
+    // The competitor's own domain OR a subdomain of it (e.g.
+    // partners.bet365.com) is their own site/infrastructure, not a third
+    // party -- a bare `=== competitor.domain` check let a subdomain slip
+    // through into the pool as if it were an independent result.
+    if (isSameRegistrableDomain(itemHost, competitor.domain)) continue;
     if (seenUrls.has(item.url)) continue;
     seenUrls.add(item.url);
     pool.push(item);
     if (pool.length >= MAX_CANDIDATE_POOL) break;
   }
+  funnel.deduplicated = combined.length - pool.length;
 
   if (pool.length === 0) {
-    return { classified: [], itemsSearched: combined.length };
+    return { classified: [], itemsSearched: combined.length, funnel };
   }
 
-  const classified = await raceWithTimeout(
-    (signal) => classifyResults(pool, competitor.name, competitor.domain, signal),
-    CLASSIFY_TIMEOUT_MS,
-    `AI classification (${competitor.domain})`,
-    parentSignal
+  // Classification latency scales with pool size (both the prompt and,
+  // more, the structured output the model has to produce). Cap what
+  // actually goes to the AI call for speed, sampled evenly across sources
+  // so a naive prefix slice can't silently exclude an entire provider (e.g.
+  // every YouTube item) just because Serper's results happened to come
+  // first in the combined pool.
+  const classifyInput = sampleAcrossSources(pool, MAX_CLASSIFY_INPUT);
+  const classifyInputUrls = new Set(classifyInput.map((i) => i.url));
+  const overflow = pool.filter((i) => !classifyInputUrls.has(i.url));
+  funnel.sentToAI = classifyInput.length;
+
+  const categoryPhrases = [businessContext.category, ...businessContext.commercialIntentConcepts].filter(
+    (p): p is string => !!p
   );
 
-  return { classified, itemsSearched: combined.length };
+  log.mark("classification_start", { domain: competitor.domain, poolSize: pool.length, sentToAI: classifyInput.length });
+  let classified: ClassifiedResult[];
+  try {
+    const aiResult = await raceWithTimeout(
+      (signal) => classifyResults(classifyInput, competitor.name, competitor.domain, businessContext, signal, intent),
+      CLASSIFY_TIMEOUT_MS,
+      `AI classification (${competitor.domain})`,
+      parentSignal
+    );
+    funnel.aiClassified = aiResult.length;
+
+    // Items the AI evaluated but didn't confirm as strong-enough evidence,
+    // plus anything past the AI input cap that was never evaluated at all,
+    // still get an honest, deterministic second look: real search signal
+    // must not just vanish because the AI's stricter competitor-relationship
+    // bar wasn't met. Only items that ALSO show a real keyword signal are
+    // rescued -- a plain brand mention with nothing else stays excluded.
+    const aiRejectedUrls = new Set(aiResult.filter((r) => !r.validCandidate).map((r) => r.sourceUrl));
+    const rejectedItems = classifyInput.filter((item) => aiRejectedUrls.has(item.url));
+    const rescued = scoreUnverifiedIfSignal([...rejectedItems, ...overflow], { categoryPhrases, intent, market: businessContext.market, businessModel: businessContext.businessModel });
+    funnel.rescuedScored = rescued.length;
+    funnel.rejectedWeakEvidence = aiRejectedUrls.size + overflow.length - rescued.length;
+
+    classified = [...aiResult, ...rescued];
+    log.mark("classification_end", {
+      domain: competitor.domain,
+      aiClassified: aiResult.length,
+      validFromAI: aiResult.filter((r) => r.validCandidate).length,
+      rescued: rescued.length,
+    });
+  } catch (err) {
+    // AI classification failing or timing out must never throw away a real,
+    // already-discovered evidence pool -- degrade to deterministic,
+    // clearly-unverified scoring over the full pool instead of rejecting.
+    log.fail("classification", err, { domain: competitor.domain, provider: "anthropic" });
+    classified = scoreUnverified(pool, { categoryPhrases, intent, market: businessContext.market, businessModel: businessContext.businessModel });
+    funnel.timedOutFallbackScored = classified.length;
+    log.mark("classification_end", { domain: competitor.domain, classified: classified.length, verified: false });
+  }
+
+  // A hit whose resolved entity is the competitor's OWN affiliate/partner
+  // infrastructure (own domain/subdomain, or a separately-branded but
+  // clearly competitor-owned program page) is valuable competitor
+  // intelligence, but never an independent, recruitable partner -- see
+  // entity.ts's flagCompetitorOwnedInfrastructure.
+  classified = flagCompetitorOwnedInfrastructure(classified, competitor);
+
+  return { classified, itemsSearched: combined.length, funnel };
 }
 
 export async function POST(request: NextRequest) {
+  const requestId = randomUUID();
+  const log = createScanLogger(requestId);
+  log.mark("request_received");
+
   const clientKey = request.headers.get("x-forwarded-for") ?? "unknown";
   if (isRateLimited(clientKey)) {
     return errorResponse("Too many scans from this connection. Please try again in a few minutes.", 429);
@@ -188,6 +348,7 @@ export async function POST(request: NextRequest) {
   const brand = deriveBrandName(url.hostname);
 
   if (!(await domainLooksReachable(url.hostname))) {
+    log.mark("rejected_unreachable_domain", { domain });
     return errorResponse("We couldn't find that website. Check the URL and try again.", 422);
   }
 
@@ -201,7 +362,10 @@ export async function POST(request: NextRequest) {
       totalFound: candidates.length,
       candidates: candidates.slice(0, MAX_RESULTS_RETURNED),
       businessCategory: "Sports nutrition supplements",
+      businessMarket: "United States",
+      businessKeywords: ["protein powder", "electrolyte mix"],
       competitorsAnalyzed: ["examplecompetitor.com"],
+      discoveryStrategiesUsed: ["competitor"],
     };
     return NextResponse.json(response);
   }
@@ -219,96 +383,361 @@ export async function POST(request: NextRequest) {
   try {
     // Stage 1: understand what this business actually sells, grounded in
     // their real homepage content where we can fetch it. A fetch failure
-    // degrades to analysing from the domain-derived name alone rather than
-    // failing outright.
+    // falls back to a web search for the domain/brand instead of leaving
+    // business analysis with nothing but the bare domain name to guess from.
+    log.mark("homepage_fetch_start");
     const page = await withFallback(
-      (signal) => fetchHomepageText(url, signal),
+      (signal) => fetchHomepageText(url, signal, log),
       HOMEPAGE_FETCH_TIMEOUT_MS,
       "homepage fetch",
       null
     );
+    log.mark("homepage_fetch_end", { fetched: page !== null });
+
+    let searchContext: string | null = null;
+    if (!page) {
+      log.mark("business_context_search_start");
+      searchContext = await withFallback(
+        (signal) => fetchBusinessContextFromWeb(brand, domain, signal),
+        BUSINESS_CONTEXT_SEARCH_TIMEOUT_MS,
+        "business context web search",
+        null
+      );
+      log.mark("business_context_search_end", { found: searchContext !== null });
+    }
 
     let profile;
+    log.mark("business_analysis_start");
     try {
       profile = await raceWithTimeout(
-        (signal) => identifyBusiness(brand, domain, page, signal),
+        (signal) => identifyBusiness(brand, domain, page, searchContext, signal),
         BUSINESS_ANALYSIS_TIMEOUT_MS,
         "business analysis",
         controller.signal
       );
     } catch (err) {
+      log.fail("business_analysis", err, { provider: "anthropic", required: true });
       if (err instanceof StageTimeoutError || err instanceof BusinessAnalysisError) {
         return errorResponse("We couldn't analyse your business right now. Please try again in a moment.", 502);
       }
       throw err;
     }
+    log.mark("business_analysis_end", {
+      category: profile.category,
+      suggestedCompetitors: profile.competitorNames.length,
+    });
 
-    if (profile.competitorNames.length === 0) {
-      return NextResponse.json(emptyResponse(brand, domain, profile.category, [], 0));
+    // The Partner Intent Profile -- how THIS business actually grows,
+    // generated dynamically above, never hardcoded per industry/domain.
+    // Logged in full since this sandbox has no other way to inspect it on
+    // a real deployed run; it's what drives query generation, role-fit
+    // scoring, and (deprioritized types) ranking below.
+    const businessContext = buildBusinessContext(profile);
+    const intent = buildPartnerTypeIntent(profile);
+    log.mark("partner_intent_profile", {
+      businessModel: profile.businessModel,
+      targetCustomers: profile.targetCustomers,
+      salesModel: profile.salesModel,
+      market: profile.market,
+      prioritizedPartnerTypes: profile.prioritizedPartnerTypes,
+      deprioritizedPartnerTypes: profile.deprioritizedPartnerTypes,
+      commercialIntentConcepts: profile.commercialIntentConcepts,
+    });
+
+    // Best-effort persistence of the Partner Intent Profile just computed,
+    // so Deep Discovery (if the user starts it) reuses THIS exact analysis
+    // rather than re-running business identification -- see Deep
+    // Discovery's own worker.ts loadProfile(). Bounded to a couple of
+    // seconds and never allowed to fail or slow down Quick Scan itself:
+    // when the Partnership Graph isn't configured (isGraphConfigured()),
+    // or this write fails/times out, Quick Scan proceeds exactly as before.
+    if (isGraphConfigured()) {
+      await withFallback(
+        () =>
+          upsertBusiness({
+            domain,
+            name: brand,
+            category: profile.category,
+            businessModel: profile.businessModel,
+            targetMarket: profile.market,
+            targetCustomers: profile.targetCustomers,
+            salesModel: profile.salesModel,
+            partnerIntentProfile: profile as unknown as Record<string, unknown>,
+          }),
+        GRAPH_PERSIST_TIMEOUT_MS,
+        "graph business upsert",
+        null
+      ).catch(() => null);
     }
 
-    // Stage 2: resolve each suggested brand name to a real, live domain —
-    // never trust the model's name alone. Resolution failures just drop
-    // that candidate competitor rather than fabricating a domain.
-    const resolvedOrNull = await Promise.all(
-      profile.competitorNames.slice(0, MAX_COMPETITORS).map((name) =>
-        withFallback(
-          (signal) => resolveCompetitorDomain(name, signal),
-          COMPETITOR_RESOLVE_TIMEOUT_MS,
-          `resolve competitor "${name}"`,
-          null
+    // Category/product-signal search is kicked off now, concurrently with
+    // competitor resolution below -- it doesn't depend on which competitors
+    // resolve.
+    const categoryPoolPromise = fetchCategoryPool(profile, domain, SOURCE_TIMEOUT_MS, log);
+
+    // Resolve competitors -- a high-value signal, not a hard prerequisite.
+    // Resolution failures just drop that candidate competitor rather than
+    // fabricating a domain. Needed before the concurrent block below both
+    // for Strategy A's own discovery and to filter competitor domains out
+    // of the category pool.
+    let competitors: ResolvedCompetitor[] = [];
+    if (profile.competitorNames.length > 0) {
+      log.mark("competitor_resolution_start", { candidates: profile.competitorNames.length });
+      const resolvedOrNull = await Promise.all(
+        profile.competitorNames.slice(0, MAX_COMPETITORS).map((name) =>
+          withFallback(
+            (signal) => resolveCompetitorDomain(name, signal),
+            COMPETITOR_RESOLVE_TIMEOUT_MS,
+            `resolve competitor "${name}"`,
+            null
+          )
         )
-      )
-    );
-    const competitors = resolvedOrNull.filter((c): c is ResolvedCompetitor => c !== null);
-
-    if (competitors.length === 0) {
-      return NextResponse.json(emptyResponse(brand, domain, profile.category, [], 0));
+      );
+      competitors = resolvedOrNull.filter((c): c is ResolvedCompetitor => c !== null);
+      log.mark("competitor_resolution_end", { resolved: competitors.map((c) => c.domain) });
     }
 
-    // Stage 3 + 4: for each resolved competitor, discover who already
-    // promotes them and classify the evidence — in parallel across
-    // competitors. One competitor's pipeline failing outright (the required
-    // web source genuinely broken/timed out) doesn't sink the others.
-    const perCompetitor = await Promise.allSettled(
-      competitors.map((c) => discoverForCompetitor(c, controller.signal))
-    );
+    // Strategy A (competitor discovery+classification) and Strategy B/C/D
+    // (category discovery+classification) now run FULLY concurrently --
+    // confirmed root cause of a real deployed scan failing: they ran
+    // sequentially, Strategy A's classification alone consumed the request
+    // budget down to the wire, and Strategy B's classification started with
+    // almost no time left before the overall safety net aborted it.
+    // Neither strategy depends on the other's outcome; both are merged
+    // afterward and ranked by signal strength (see dedupeCandidates), so a
+    // strong Strategy A result always outranks a Strategy B one without
+    // needing to decide in advance which to bother running.
+    const [perCompetitorOutcomes, categoryOutcome] = await Promise.all([
+      Promise.allSettled(competitors.map((c) => discoverForCompetitor(c, businessContext, intent, controller.signal, log))),
+      (async (): Promise<{ classified: ClassifiedResult[]; itemsSearched: number; funnel: StrategyFunnel }> => {
+        const { pool: categoryPool, itemsSearched } = await categoryPoolPromise;
+        if (!profile.category || categoryPool.length === 0) {
+          return { classified: [], itemsSearched, funnel: emptyFunnel() };
+        }
+        // Competitor domains weren't known when the pool was fetched --
+        // filter them out now, so a resolved competitor's own site never
+        // gets classified as a partner.
+        const competitorDomains = new Set(competitors.map((c) => c.domain));
+        const filteredPool = categoryPool.filter((item) => {
+          try {
+            return !competitorDomains.has(new URL(item.url).hostname.replace(/^www\./i, ""));
+          } catch {
+            return false;
+          }
+        });
+        const priorFunnel = { totalCandidates: categoryPool.length, deduplicated: categoryPool.length - filteredPool.length };
+        if (filteredPool.length === 0) {
+          return { classified: [], itemsSearched, funnel: { ...priorFunnel, sentToAI: 0, aiClassified: 0, timedOutFallbackScored: 0, rescuedScored: 0, rejectedWeakEvidence: 0 } };
+        }
+        const { classified, funnel } = await classifyCategoryPool(
+          filteredPool,
+          profile.category,
+          businessContext,
+          controller.signal,
+          CLASSIFY_TIMEOUT_MS,
+          log,
+          priorFunnel,
+          intent
+        );
+        return { classified, itemsSearched, funnel };
+      })(),
+    ]);
 
-    const allClassified: ClassifiedResult[] = [];
-    let queriesRun = 0;
+    const strategyAClassified: ClassifiedResult[] = [];
+    let strategyAQueriesRun = 0;
     let anyCompetitorSucceeded = false;
-    let sourceFailure: unknown = null;
-
-    for (const outcome of perCompetitor) {
+    const strategyAFunnel = emptyFunnel();
+    for (const outcome of perCompetitorOutcomes) {
       if (outcome.status === "fulfilled") {
         anyCompetitorSucceeded = true;
-        allClassified.push(...outcome.value.classified);
-        queriesRun += outcome.value.itemsSearched;
-      } else {
-        sourceFailure = outcome.reason;
+        strategyAClassified.push(...outcome.value.classified);
+        strategyAQueriesRun += outcome.value.itemsSearched;
+        strategyAFunnel.totalCandidates += outcome.value.funnel.totalCandidates;
+        strategyAFunnel.deduplicated += outcome.value.funnel.deduplicated;
+        strategyAFunnel.sentToAI += outcome.value.funnel.sentToAI;
+        strategyAFunnel.aiClassified += outcome.value.funnel.aiClassified;
+        strategyAFunnel.timedOutFallbackScored += outcome.value.funnel.timedOutFallbackScored;
+        strategyAFunnel.rescuedScored += outcome.value.funnel.rescuedScored;
+        strategyAFunnel.rejectedWeakEvidence += outcome.value.funnel.rejectedWeakEvidence;
+      }
+    }
+    const strategyAInfraFailed = competitors.length > 0 && !anyCompetitorSucceeded;
+
+    const strategyBClassified = categoryOutcome.classified;
+    const strategyBQueriesRun = categoryOutcome.itemsSearched;
+    const strategyBFunnel = categoryOutcome.funnel;
+
+    const allClassified = [...strategyAClassified, ...strategyBClassified];
+    const queriesRun = strategyAQueriesRun + strategyBQueriesRun;
+    const discoveryStrategiesUsed: Array<"competitor" | "category"> = [
+      ...(competitors.length > 0 ? (["competitor"] as const) : []),
+      ...(strategyBClassified.length > 0 ? (["category"] as const) : []),
+    ];
+
+    // A hard error is reserved for genuine infrastructure failure -- never
+    // for legitimately weak or absent evidence, which still returns an
+    // honest (possibly empty) result below. Classification itself can no
+    // longer fail outright (a timeout/error degrades to deterministic,
+    // clearly-unverified scoring over the full pool instead -- see
+    // classify.ts's scoreUnverified), so the only failure mode left is the
+    // required discovery source genuinely breaking for every resolved
+    // competitor while category discovery also turned up nothing at all.
+    // (One known, pre-existing gap: if the required search provider itself
+    // is fully down, competitor resolution and the category fallback's web
+    // search both already degrade to "found nothing" rather than
+    // surfacing that as an infra failure here -- the structured logs above
+    // capture the real HTTP status/error either way.)
+    const allAttemptsInfraFailed = strategyAInfraFailed && allClassified.length === 0;
+
+    if (allAttemptsInfraFailed) {
+      log.mark("response_sent", { outcome: "all_strategies_failed" });
+      return errorResponse("We couldn't complete the search right now. Please try again in a moment.", 502);
+    }
+
+    const deduped = dedupeCandidates(allClassified, intent, businessContext.market, businessContext.businessModel);
+
+    // ONE canonical qualification step for every candidate, regardless of
+    // which discovery/classification path produced it -- see
+    // qualification.ts. Competitor-owned infrastructure, a directly
+    // comparable/competing business, or a non-entity evidence source is
+    // real, useful intelligence, just never shown as an independent,
+    // recruitable Potential Partner (no separate "Competitor
+    // Intelligence" UI section to show it in without redesigning the
+    // site) -- but logged per-candidate below so a real run is auditable
+    // without guessing why something did or didn't make the list.
+    //
+    // Quick Scan's result COUNT is decided entirely here, by
+    // `showInQuickScan` -- never by a downstream "top 3"/"fill to N" step.
+    // A candidate that fails the quality gate is dropped, however many (or
+    // few) candidates that leaves; genuinely strong candidates are never
+    // truncated below MAX_RESULTS_RETURNED just to hit some target count.
+    const qualifications = deduped.map((c) => ({ candidate: c, qualification: qualifyOpportunity(c) }));
+    log.mark("candidate_qualifications", {
+      candidates: qualifications.map(({ candidate, qualification }) => ({
+        name: candidate.name,
+        type: candidate.type,
+        relationshipDirection: candidate.relationshipDirection,
+        fitScore: candidate.fitScore,
+        evidenceConfidence: candidate.evidenceConfidence,
+        potentialRelationship: candidate.potentialRelationship,
+        finalClassification: qualification.finalClassification,
+        showInQuickScan: qualification.showInQuickScan,
+        qualityTier: qualification.qualityTier,
+        exclusionReason: qualification.exclusionReason,
+      })),
+    });
+    const TIER_RANK: Record<QualityTier, number> = { strong: 2, good: 1, weak: 0 };
+    const potentialPartners = qualifications
+      .filter(({ qualification }) => qualification.showInQuickScan)
+      .sort(
+        (a, b) =>
+          TIER_RANK[b.qualification.qualityTier] - TIER_RANK[a.qualification.qualityTier] ||
+          b.candidate.fitScore - a.candidate.fitScore
+      )
+      .map(({ candidate }) => candidate);
+    const excludedAsIntelligence = deduped.length - potentialPartners.length;
+
+    // Full discovery -> classification funnel, logged once per scan so a
+    // real run can be audited stage by stage without guessing where
+    // candidates disappeared. "removedByConfidence" replicates dedupe.ts's
+    // own gate rather than exposing it as a side channel from that
+    // function -- verified:false candidates are never actually gated by
+    // confidence (see minConfidenceFor), so this is expected to be 0 for
+    // them and only ever count real AI-verified rejections.
+    const verifiedTrueCount = allClassified.filter((c) => c.validCandidate && c.verified).length;
+    const verifiedFalseCount = allClassified.filter((c) => c.validCandidate && !c.verified).length;
+    const belowMinConfidence = allClassified.filter(
+      (c) => c.validCandidate && c.confidence < minConfidenceFor(c.signalStrength, c.verified)
+    );
+    const removedByConfidence = belowMinConfidence.length;
+    const aiRejectedCandidates = allClassified.filter((c) => !c.validCandidate);
+    // Sample of the actual entities/reasons behind removedByConfidence and
+    // AI-rejected counts above, not just the totals -- this is what
+    // answers "why did entity X disappear" on a real scan without
+    // guessing; capped at 10 each to keep the log line a sane size.
+    log.mark("rejected_candidates_sample", {
+      belowMinimumConfidence: belowMinConfidence.slice(0, 10).map((c) => ({
+        name: c.name,
+        type: c.type,
+        relationshipDirection: c.relationshipDirection,
+        confidence: c.confidence,
+        requiredConfidence: minConfidenceFor(c.signalStrength, c.verified),
+        signalStrength: c.signalStrength,
+        verified: c.verified,
+        reason: c.reason,
+      })),
+      aiRejectedAsInvalid: aiRejectedCandidates.slice(0, 10).map((c) => ({
+        name: c.name,
+        type: c.type,
+        relationshipDirection: c.relationshipDirection,
+        confidence: c.confidence,
+        reason: c.reason,
+      })),
+    });
+    const similarEvidenceNetworkFlagged = deduped.filter((c) => c.similarEvidenceNetwork).length;
+    // Direction-based reclassification (see relationshipDirection.ts)
+    // already happened upstream, before dedupe -- these counts are read
+    // back from the final deduped list purely for funnel visibility, not
+    // recomputed. A self-promoting/documentation direction is exactly what
+    // pushed these candidates' `type` into NON_PARTNER_TYPES, so this is a
+    // subset of excludedAsIntelligence above, broken out so it's clear how
+    // much of the exclusion is specifically a direction call versus
+    // competitor-domain/evidence-source detection.
+    const excludedByRelationshipDirection = deduped.filter((c) =>
+      ["operates_affiliate_program", "recruits_affiliates", "publishes_about"].includes(c.relationshipDirection)
+    ).length;
+    log.mark("funnel_summary", {
+      totalCandidates: strategyAFunnel.totalCandidates + strategyBFunnel.totalCandidates,
+      removedForDomainOrDuplicate: strategyAFunnel.deduplicated + strategyBFunnel.deduplicated,
+      sentToAI: strategyAFunnel.sentToAI + strategyBFunnel.sentToAI,
+      aiClassified: strategyAFunnel.aiClassified + strategyBFunnel.aiClassified,
+      timedOutUsedFullPoolFallback: strategyAFunnel.timedOutFallbackScored + strategyBFunnel.timedOutFallbackScored,
+      rescuedFromAiRejectionOrOverflow: strategyAFunnel.rescuedScored + strategyBFunnel.rescuedScored,
+      verifiedTrueCount,
+      verifiedFalseCount,
+      rejectedWeakEvidenceNotRescued: strategyAFunnel.rejectedWeakEvidence + strategyBFunnel.rejectedWeakEvidence,
+      removedByMinimumConfidence: removedByConfidence,
+      resolvedEntitiesAfterDedupe: deduped.length,
+      excludedAsCompetitorInfrastructureOrEvidenceSource: excludedAsIntelligence,
+      excludedByRelationshipDirection,
+      flaggedAsSimilarEvidenceNetwork: similarEvidenceNetworkFlagged,
+      finalReturned: Math.min(potentialPartners.length, MAX_RESULTS_RETURNED),
+      totalPotentialPartnersBeforeSlice: potentialPartners.length,
+    });
+
+    // PREVIEW FALLBACK -- only when NOTHING passed the normal quality gate.
+    // The gate itself is not weakened: everything it excluded as noise
+    // (evidence sources, competitor infrastructure, comparable businesses,
+    // institutional sources, reverse-direction evidence) stays excluded;
+    // at most ONE genuinely plausible, recruitable weak-pool candidate is
+    // shown as an honest "Potential fit / Evidence: Limited" preview.
+    // Fully logged either way so the selection (or the reason the empty
+    // state remained) is auditable per scan without guessing.
+    let quickScanCandidates = potentialPartners;
+    let previewFallbackUsed = false;
+    if (potentialPartners.length === 0) {
+      const fallback = selectPreviewFallbackCandidate(qualifications, businessContext.market, businessContext.businessModel);
+      log.mark("preview_fallback", {
+        normalQualifiedCount: 0,
+        weakOrRejectedCount: qualifications.length,
+        considered: fallback.considered,
+        selected: fallback.candidate?.name ?? null,
+        reason: fallback.reason,
+      });
+      if (fallback.candidate) {
+        previewFallbackUsed = true;
+        quickScanCandidates = [fallback.candidate];
       }
     }
 
-    if (!anyCompetitorSucceeded) {
-      const err = sourceFailure;
-      if (err instanceof StageTimeoutError || err instanceof SearchProviderError) {
-        return errorResponse("We couldn't complete the search right now. Please try again in a moment.", 502);
-      }
-      if (err instanceof ClassifierError) {
-        return errorResponse("We couldn't verify the evidence right now. Please try again in a moment.", 502);
-      }
-      throw err;
-    }
-
-    const deduped = dedupeCandidates(allClassified);
-
-    if (deduped.length === 0) {
+    if (quickScanCandidates.length === 0) {
+      log.mark("response_sent", { outcome: "no_candidates_found" });
       return NextResponse.json(
-        emptyResponse(brand, domain, profile.category, competitors.map((c) => c.domain), queriesRun)
+        emptyResponse(brand, domain, profile, competitors.map((c) => c.domain), queriesRun, discoveryStrategiesUsed)
       );
     }
 
-    const shortlist = deduped.slice(0, MAX_ENRICHED);
+    const shortlist = quickScanCandidates.slice(0, MAX_ENRICHED);
 
     // Enrichment runs only on the already-verified shortlist, after dedupe —
     // never spend a Hunter credit on a weak or duplicate candidate. Each
@@ -316,6 +745,7 @@ export async function POST(request: NextRequest) {
     // degrades that single candidate to contactStatus "not_attempted"
     // instead of holding up or breaking the rest of an otherwise-successful
     // result.
+    log.mark("enrichment_start", { shortlistSize: shortlist.length });
     const enriched = isHunterConfigured()
       ? await Promise.all(
           shortlist.map(async (candidate) => {
@@ -329,19 +759,32 @@ export async function POST(request: NextRequest) {
           })
         )
       : shortlist;
+    log.mark("enrichment_end", { found: enriched.filter((c) => c.contactStatus === "found").length });
 
+    log.mark("response_serialization_start");
     const response: DiscoverResponse = {
       mock: false,
       brand,
       domain,
       queriesRun,
-      totalFound: deduped.length,
+      totalFound: quickScanCandidates.length,
       candidates: enriched.slice(0, MAX_RESULTS_RETURNED),
+      previewFallback: previewFallbackUsed,
       businessCategory: profile.category,
+      businessMarket: profile.market,
+      businessKeywords: profile.keywords,
       competitorsAnalyzed: competitors.map((c) => c.domain),
+      discoveryStrategiesUsed,
     };
+    log.mark("response_sent", {
+      outcome: previewFallbackUsed ? "preview_fallback" : "success",
+      totalFound: quickScanCandidates.length,
+      strategiesUsed: discoveryStrategiesUsed,
+    });
     return NextResponse.json(response);
   } catch (err) {
+    log.fail("unhandled", err, { required: true });
+    log.mark("response_sent", { outcome: "error" });
     if (err instanceof DOMException && err.name === "AbortError") {
       return errorResponse("The scan took too long. Please try again.", 504);
     }

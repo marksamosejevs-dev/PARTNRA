@@ -37,3 +37,13 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+[functions]
+  # Deep Discovery's background worker (netlify/functions/deep-discovery-
+  # worker.ts) lives alongside the Next.js app's own functions, generated
+  # separately by @netlify/plugin-nextjs above -- both deploy together.
+  # NOTE: the scheduled trigger this function declares (see its own
+  # `config.schedule`) requires the site's Netlify plan to support
+  # Scheduled Functions; this repository has no way to verify or enable
+  # that from here.
+  directory = "netlify/functions"

@@ -1,5 +1,5 @@
 import { SourceItem } from "../types";
-import { buildYoutubeQueries } from "../queries";
+import { buildYoutubeQueries, buildCategoryYoutubeQueries } from "../queries";
 
 interface YoutubeSearchItem {
   id?: { videoId?: string };
@@ -7,6 +7,7 @@ interface YoutubeSearchItem {
     title?: string;
     description?: string;
     channelId?: string;
+    channelTitle?: string;
   };
 }
 
@@ -38,6 +39,9 @@ async function searchYoutube(query: string, apiKey: string, signal: AbortSignal)
           ? `https://www.youtube.com/channel/${snippet.channelId}`
           : null,
         snippet: (snippet.description ?? "").slice(0, 300),
+        // The channel's real, authoritative name -- entity resolution
+        // prefers this over guessing an entity name from the video title.
+        ...(snippet.channelTitle ? { entityName: snippet.channelTitle } : {}),
       };
     })
     .filter((x): x is SourceItem => x !== null);
@@ -48,12 +52,36 @@ export function isYoutubeConfigured(): boolean {
 }
 
 /** Optional source — unconfigured or failing is not fatal to the scan. */
-export async function discoverFromYoutube(brand: string, signal: AbortSignal): Promise<SourceItem[]> {
+export async function discoverFromYoutube(
+  brand: string,
+  signal: AbortSignal,
+  commercialIntentConcepts: string[] = []
+): Promise<SourceItem[]> {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) return [];
 
   try {
-    const queries = buildYoutubeQueries(brand);
+    const queries = buildYoutubeQueries(brand, commercialIntentConcepts);
+    const batches = await Promise.all(queries.map((q) => searchYoutube(q, apiKey, signal)));
+    return batches.flat();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    return [];
+  }
+}
+
+/** Category-based fallback source — same optional, never-fatal contract as discoverFromYoutube. */
+export async function discoverCategoryFromYoutube(
+  category: string,
+  keywords: string[],
+  signal: AbortSignal,
+  commercialIntentConcepts: string[] = []
+): Promise<SourceItem[]> {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) return [];
+
+  try {
+    const queries = buildCategoryYoutubeQueries(category, keywords, commercialIntentConcepts);
     const batches = await Promise.all(queries.map((q) => searchYoutube(q, apiKey, signal)));
     return batches.flat();
   } catch (err) {

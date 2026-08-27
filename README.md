@@ -49,12 +49,24 @@ never show fake results as if they were real.
    - Create an API key
    - This gives you a value for `YOUTUBE_API_KEY`
 
-4. **Apify**, so the scanner also checks public Instagram and TikTok posts.
+4. **OpenAI**, so the scanner also runs an OpenAI Web Search pass (via the
+   Responses API) looking specifically for promo codes, affiliate links,
+   ambassador relationships and similar commercial signals.
+   - Sign up at https://platform.openai.com/
+   - Create an API key
+   - This gives you a value for `OPENAI_API_KEY`
+
+5. **Apify**, for public Instagram and TikTok posts. **Currently not called
+   by the live scan** even if configured — Apify's actor-run calls were the
+   confirmed cause of repeated production timeouts, and re-enabling them
+   needs a background-job setup this project doesn't have yet. Configuring
+   this key today has no effect; it's kept here so nothing needs to change
+   once that exists.
    - Sign up at https://console.apify.com/
    - Create an API token under Settings → Integrations
    - This gives you a value for `APIFY_API_TOKEN`
 
-5. **Hunter**, so verified candidates can show a real business email instead
+6. **Hunter**, so verified candidates can show a real business email instead
    of "Coming soon".
    - Sign up at https://hunter.io/
    - Create an API key
@@ -63,9 +75,9 @@ never show fake results as if they were real.
      verification, and only when a real business domain (not a social
      profile) is available — it never guesses or invents an email.
 
-If any of the three optional services is missing or fails, the scan still
-runs on whichever sources ARE available — it never fails the whole scan
-because one optional add-on isn't configured.
+If any of the optional services is missing or fails, the scan still runs on
+whichever sources ARE available — it never fails the whole scan because one
+optional add-on isn't configured.
 
 ## 2. Where to add these keys
 
@@ -85,7 +97,8 @@ runtime, kept out of the code itself so they're never publicly visible.
    | `ANTHROPIC_API_KEY` | (the key from Anthropic) |
    | `LLM_MODEL` | `claude-haiku-4-5-20251001` |
    | `YOUTUBE_API_KEY` | (optional — the key from Google Cloud) |
-   | `APIFY_API_TOKEN` | (optional — the token from Apify) |
+   | `OPENAI_API_KEY` | (optional — the key from OpenAI) |
+   | `APIFY_API_TOKEN` | (optional — the token from Apify; not currently used by the live scan, see above) |
    | `HUNTER_API_KEY` | (optional — the key from Hunter) |
    | `PARTNRA_MOCK_MODE` | `false` |
 
@@ -216,3 +229,50 @@ push your changes to GitHub — Netlify picks them up automatically.
   webhook events
 - `src/app/subscribed/page.tsx` — the post-checkout success page (verifies
   payment with Stripe directly before showing "Welcome to PARTNRA")
+
+## 9. Deep Discovery (optional, persisted background research)
+
+Quick Scan (above) is fast and synchronous. Deep Discovery is a separate,
+optional layer that researches a market in the background — expanding
+comparable brands, tracing who actually promotes/distributes/refers to
+them, and persisting everything it verifies into a "Partnership Graph" so
+future scans start smarter. It is entirely additive: without the env vars
+below, Quick Scan works exactly as before and the "Search deeper" CTA
+quietly doesn't appear.
+
+**Setup:**
+1. Create a project at [supabase.com](https://supabase.com/dashboard).
+2. Apply the SQL files in `supabase/migrations/` **in numeric order** — via
+   the Supabase CLI (`supabase db push`) or by pasting each file's contents
+   into the SQL editor.
+3. Add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (Project Settings →
+   API — the **service role** key, not the anon key) to `.env.local` and to
+   Netlify's environment variables. See `.env.example` for details.
+4. Deep Discovery's background worker
+   (`netlify/functions/deep-discovery-worker.ts`) is a Netlify Scheduled
+   Function that fires every minute to advance queued work — confirm your
+   Netlify plan supports Scheduled Functions. If a Deep Discovery scan
+   appears to hang at 0 progress, check whether this function is deployed
+   and firing in Netlify's Functions log.
+
+**Structure:**
+- `supabase/migrations/` — the Partnership Graph's schema (businesses,
+  brands, entities, relationships, evidence, opportunities, scans,
+  discovery_jobs) plus a few atomic upsert/counter Postgres functions.
+- `src/lib/graph/` — the typed data-access layer (the only code that talks
+  to Supabase directly).
+- `src/lib/deepDiscovery/` — the research pipeline itself: comparable-brand
+  expansion, one-hop relationship discovery, cross-brand entity expansion,
+  contact enrichment, Fit V2 (Quick Scan's own Fit plus cross-brand
+  corroboration), preview-candidate selection, and the job-queue worker.
+  It reuses Quick Scan's classification/qualification/geographic-fit logic
+  from `src/lib/discovery/` rather than duplicating it.
+- `src/app/api/deep-discovery/start` / `.../status/[scanId]` — the two thin
+  Route Handlers the frontend calls; almost all real work happens in the
+  scheduled worker, not in these requests.
+- `src/components/ui/DeepDiscoveryPanel.tsx` — the "Search deeper" CTA and
+  progress/preview UI, rendered inside `DiscoveryScanner.tsx`.
+
+There is no importer wired up yet for a seed dataset (e.g. a
+`partnra_seed_database_v1.xlsx`) — if you have one, it isn't present in
+this repository, so nothing here has attempted to load it.

@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import { Arrow } from "./ui/Arrow";
 import { EvidenceCard } from "./ui/EvidenceCard";
+import { DeepDiscoveryPanel, readStoredPointer, type DeepDiscoveryPointer } from "./ui/DeepDiscoveryPanel";
 import { normalizeBrandUrl } from "@/lib/discovery/domain";
 import type { Candidate, DiscoverErrorResponse, DiscoverResponse } from "@/lib/discovery/types";
 
@@ -61,12 +62,26 @@ export function DiscoveryScanner() {
   const [stageIndex, setStageIndex] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [result, setResult] = useState<DiscoverResponse | null>(null);
+  const [restoredPointer, setRestoredPointer] = useState<DeepDiscoveryPointer | null>(null);
   const stageTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     return () => {
       if (stageTimer.current) clearInterval(stageTimer.current);
     };
+  }, []);
+
+  // Restoration (Problem B): a page load never has any Quick Scan `result`
+  // in memory, so DeepDiscoveryPanel below is otherwise unreachable even
+  // though a real, persisted Deep Discovery scan may still exist in
+  // Supabase. The only thing that survives the reload client-side is a
+  // small {scanId, domain} pointer -- never results/counters themselves --
+  // read once on mount; everything else still comes from the server.
+  useEffect(() => {
+    // localStorage only exists client-side, so this can't be a lazy
+    // useState initializer without causing an SSR/hydration mismatch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRestoredPointer(readStoredPointer());
   }, []);
 
   async function handleSubmit(e: FormEvent) {
@@ -117,9 +132,30 @@ export function DiscoveryScanner() {
     setErrorMsg("");
   }
 
-  const shown: Candidate[] = result?.candidates.slice(0, 3) ?? [];
+  // The backend already returns only candidates that passed the final
+  // quality gate (see qualification.ts's qualifyOpportunity), sorted best
+  // first, and already capped at a sane Quick Scan maximum -- there is no
+  // "top 3" here. Showing the FULL returned list, whatever its length (0
+  // to that cap), is what makes result count genuinely reflect quality
+  // instead of an artificial display truncation.
+  const shown: Candidate[] = result?.candidates ?? [];
   const moreCount = result ? Math.max(result.totalFound - shown.length, 0) : 0;
-  const strongCount = result?.candidates.filter((c) => c.confidence >= 85).length ?? 0;
+  const isPreviewFallback = result?.previewFallback === true;
+  // A preview-fallback result must never imply verification -- no "strong
+  // match" badge, whatever the underlying candidate's own signalStrength.
+  const strongCount = isPreviewFallback
+    ? 0
+    : result?.candidates.filter((c) => c.signalStrength === "strong").length ?? 0;
+
+  const businessSummary =
+    result && (result.businessCategory || result.businessMarket || result.businessKeywords.length > 0) ? (
+      <p className="font-mono-label mb-3 text-[11px] uppercase tracking-[0.1em] text-ink/35">
+        {result.businessCategory ? `Category: ${result.businessCategory}` : "Category: unknown"}
+        {result.businessMarket ? ` · Market: ${result.businessMarket}` : ""}
+        {result.businessKeywords.length > 0 ? ` · Sells: ${result.businessKeywords.join(", ")}` : ""}
+        {result.competitorsAnalyzed.length > 0 ? ` · compared against ${result.competitorsAnalyzed.join(", ")}` : ""}
+      </p>
+    ) : null;
 
   return (
     <div className="rounded-3xl border border-ink/10 bg-paper/80 p-5 md:p-8">
@@ -154,7 +190,20 @@ export function DiscoveryScanner() {
         </button>
       </form>
 
-      {phase === "idle" && <IdlePreview />}
+      {phase === "idle" && !restoredPointer && <IdlePreview />}
+
+      {phase === "idle" && restoredPointer && (
+        <div className="mt-6">
+          <p className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/40">
+            Continuing research for {restoredPointer.domain}
+          </p>
+          <DeepDiscoveryPanel
+            domain={restoredPointer.domain}
+            initialScanId={restoredPointer.scanId}
+            onScanCleared={() => setRestoredPointer(null)}
+          />
+        </div>
+      )}
 
       {phase === "scanning" && (
         <div className="mt-6 flex items-center gap-3 rounded-2xl border border-ink/10 bg-surface/40 p-5">
@@ -178,12 +227,13 @@ export function DiscoveryScanner() {
 
       {phase === "empty" && (
         <div className="mt-6 rounded-2xl border border-ink/10 bg-surface/40 p-6 text-center">
+          {businessSummary && <div className="mb-3 text-left">{businessSummary}</div>}
           <p className="font-display text-xl font-medium tracking-tight text-ink">
-            No strong partner signals found yet.
+            We couldn&rsquo;t find enough high-confidence partners yet.
           </p>
           <p className="mt-2 text-sm text-ink/55">
-            We couldn&rsquo;t confidently match this to comparable brands with an established
-            partner presence. Try a different website, or double-check the URL.
+            We analysed your business, but there wasn&rsquo;t enough reliable public evidence to
+            recommend partners confidently yet. Try another website, or double-check the URL.
           </p>
           <button
             type="button"
@@ -193,23 +243,28 @@ export function DiscoveryScanner() {
             Try another website
             <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
           </button>
+          {result && !result.mock && (
+            <div className="mt-4 text-left">
+              <DeepDiscoveryPanel domain={result.domain} />
+            </div>
+          )}
         </div>
       )}
 
       {phase === "results" && result && (
         <div className="mt-6">
-          {(result.businessCategory || result.competitorsAnalyzed.length > 0) && (
-            <p className="font-mono-label mb-3 text-[11px] uppercase tracking-[0.1em] text-ink/35">
-              {result.businessCategory ? `Category: ${result.businessCategory}` : "Category: unknown"}
-              {result.competitorsAnalyzed.length > 0
-                ? ` · compared against ${result.competitorsAnalyzed.join(", ")}`
-                : ""}
-            </p>
-          )}
+          {businessSummary}
           <div className="flex flex-wrap items-center gap-3">
             <span className="font-display text-xl font-medium tracking-tight text-ink">
-              {shown.length} potential {shown.length === 1 ? "partner" : "partners"} found
+              {isPreviewFallback
+                ? "1 potential fit found"
+                : `${shown.length} potential ${shown.length === 1 ? "partner" : "partners"} found`}
             </span>
+            {isPreviewFallback && (
+              <span className="font-mono-label rounded-full border border-ink/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/50">
+                Early preview · evidence limited
+              </span>
+            )}
             {strongCount > 0 && (
               <span className="font-mono-label rounded-full bg-lime/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/70">
                 {strongCount} strong match{strongCount === 1 ? "" : "es"}
@@ -224,7 +279,12 @@ export function DiscoveryScanner() {
 
           <div className="mt-5 flex flex-col gap-4">
             {shown.map((candidate, i) => (
-              <EvidenceCard key={`${candidate.sourceUrl}-${i}`} candidate={candidate} demo={result.mock} />
+              <EvidenceCard
+                key={`${candidate.sourceUrl}-${i}`}
+                candidate={candidate}
+                demo={result.mock}
+                preview={isPreviewFallback}
+              />
             ))}
           </div>
 
@@ -251,6 +311,8 @@ export function DiscoveryScanner() {
               <Arrow className="group-hover:translate-x-1 group-hover:-translate-y-1" />
             </a>
           </div>
+
+          {!result.mock && <DeepDiscoveryPanel domain={result.domain} />}
         </div>
       )}
     </div>

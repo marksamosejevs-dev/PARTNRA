@@ -1,4 +1,33 @@
-import { Candidate, ClassifiedResult } from "./types";
+import { Candidate, ClassifiedResult, SignalStrength } from "./types";
+import { computeFitScore, evidenceConfidenceLabel, assessGeographicFit } from "./entity";
+import { flagDuplicateEvidenceNetworks } from "./duplicateNetwork";
+import { PartnerTypeIntent, NO_SNIPPET_PLACEHOLDER } from "./classify";
+
+/** Re-checked here (not carried as a separate field) against the FINAL merged evidence string -- a duplicate sighting can add real text a single sighting didn't have. Guards against the literal placeholder itself being long enough to look "sufficient" by length alone. */
+function evidenceLooksSufficient(evidence: string): boolean {
+  const trimmed = evidence.trim();
+  if (trimmed === NO_SNIPPET_PLACEHOLDER) return false;
+  return trimmed.length >= 20;
+}
+
+const STRENGTH_RANK: Record<SignalStrength, number> = { strong: 2, medium: 1, potential: 0 };
+
+/**
+ * The code-level backstop threshold, independent of what the classifier's
+ * own prompt already enforces. Category-strategy evidence is inherently
+ * softer (it's not tied to a named competitor), so it gets a lower bar --
+ * still real evidence per classify.ts's own rules, just not held to the
+ * same number as a direct competitor relationship. Unverified (deterministic
+ * fallback, see classify.ts's scoreUnverified) results have no threshold at
+ * all here -- their confidence number is only ever a same-tier sort key
+ * among themselves, never a pass/fail gate, since by definition no model
+ * has judged them; they're kept, just always ranked below every verified
+ * result.
+ */
+export function minConfidenceFor(strength: SignalStrength, verified: boolean): number {
+  if (!verified) return 0;
+  return strength === "strong" ? 70 : 60;
+}
 
 function norm(value: string | null): string | null {
   const trimmed = value?.trim().toLowerCase();
@@ -35,15 +64,23 @@ function mergePlatforms(a: string | null, b: string | null): string | null {
  * Drops invalid/low-confidence classifications, merges repeat sightings of
  * the same affiliate found across sources (same profile URL, promo code, or
  * name) into one candidate with a combined platform list and source count,
- * and sorts by confidence, then by source count so a candidate corroborated
- * by multiple independent sources ranks above an equally-confident
- * single-source one -- without inflating the confidence number itself.
+ * and sorts by signal strength first (a confirmed competitor relationship
+ * always outranks a category-level signal, since their confidence numbers
+ * aren't on the same scale), then confidence, then source count so a
+ * candidate corroborated by multiple independent sources ranks above an
+ * equally-confident single-source one -- without inflating the confidence
+ * number itself.
  */
-export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
+export function dedupeCandidates(
+  items: ClassifiedResult[],
+  intent?: PartnerTypeIntent,
+  market: string | null = null,
+  businessModel: string | null = null
+): Candidate[] {
   const merged: Candidate[] = [];
 
   for (const item of items) {
-    if (!item.validCandidate || item.confidence < 70) continue;
+    if (!item.validCandidate || item.confidence < minConfidenceFor(item.signalStrength, item.verified)) continue;
 
     const candidate: Candidate = {
       name: item.name,
@@ -54,10 +91,21 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       sourceCount: 1,
       evidenceType: item.evidenceType,
       evidence: item.evidence,
+      signalStrength: item.signalStrength,
+      verified: item.verified,
       promoCode: item.promoCode,
       contact: null,
       contactStatus: "not_attempted",
+      evidenceConfidence: item.evidenceConfidence,
       confidence: item.confidence,
+      fitScore: item.fitScore, // recomputed below once sourceCount/applicationUrl are final
+      applicationUrl: item.applicationUrl,
+      // Real values only assigned once the full pool is assembled, below --
+      // see flagDuplicateEvidenceNetworks.
+      similarEvidenceNetwork: false,
+      similarEvidenceDomainCount: 0,
+      potentialRelationship: item.potentialRelationship,
+      relationshipDirection: item.relationshipDirection,
       reason: item.reason,
     };
 
@@ -68,9 +116,21 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
     }
 
     const existing = merged[existingIndex];
-    const [primary, secondary] = candidate.confidence >= existing.confidence
-      ? [candidate, existing]
-      : [existing, candidate];
+    // Strength first (a confirmed competitor relationship always outranks a
+    // category-level signal, whatever the raw confidence numbers say -- the
+    // two scales aren't comparable), then AI-verified over unverified at the
+    // same strength (a model actually judged one of them), confidence only
+    // as the final tiebreaker.
+    const existingRank = STRENGTH_RANK[existing.signalStrength];
+    const candidateRank = STRENGTH_RANK[candidate.signalStrength];
+    const [primary, secondary] =
+      candidateRank !== existingRank
+        ? candidateRank > existingRank ? [candidate, existing] : [existing, candidate]
+        : candidate.verified !== existing.verified
+          ? candidate.verified ? [candidate, existing] : [existing, candidate]
+          : candidate.confidence >= existing.confidence
+            ? [candidate, existing]
+            : [existing, candidate];
 
     merged[existingIndex] = {
       ...primary,
@@ -78,9 +138,59 @@ export function dedupeCandidates(items: ClassifiedResult[]): Candidate[] {
       evidence: primary.evidence === secondary.evidence
         ? primary.evidence
         : `${primary.evidence} ${secondary.evidence}`.trim(),
+      // A real affiliate/apply page found on either sighting is worth
+      // keeping even if the primary (higher-ranked) sighting didn't have one.
+      applicationUrl: primary.applicationUrl ?? secondary.applicationUrl,
+      potentialRelationship: primary.potentialRelationship ?? secondary.potentialRelationship,
+      // Prefer whichever sighting actually determined a direction -- both
+      // start "unknown" by default, so that alone shouldn't win a merge.
+      relationshipDirection:
+        primary.relationshipDirection !== "unknown" ? primary.relationshipDirection : secondary.relationshipDirection,
       sourceCount: existing.sourceCount + 1,
     };
   }
 
-  return merged.sort((a, b) => b.confidence - a.confidence || b.sourceCount - a.sourceCount);
+  // fitScore/evidenceConfidence depend on the FINAL sourceCount,
+  // applicationUrl, and merged evidence text, which only settle once
+  // merging above is done -- recomputed here rather than trusting the
+  // per-item placeholder from classify.ts.
+  const withFinalFit = merged.map((c) => {
+    const sufficientEvidence = evidenceLooksSufficient(c.evidence);
+    // Re-derived from the FINAL merged evidence string, same reasoning as
+    // evidenceLooksSufficient above: a duplicate sighting can add real
+    // geography text a single sighting didn't have.
+    const geographicFit = assessGeographicFit(c.evidence, market);
+    return {
+      ...c,
+      evidenceConfidence: evidenceConfidenceLabel(c.signalStrength, c.verified, sufficientEvidence),
+      fitScore: computeFitScore({
+        signalStrength: c.signalStrength,
+        verified: c.verified,
+        type: c.type,
+        sourceCount: c.sourceCount,
+        hasApplicationRoute: !!c.applicationUrl,
+        prioritizedTypes: intent?.prioritized,
+        deprioritizedTypes: intent?.deprioritized,
+        relationshipDirection: c.relationshipDirection,
+        hasSufficientEvidence: sufficientEvidence,
+        geographicFit,
+        businessModel,
+      }),
+    };
+  });
+
+  // Cross-domain templated/doorway-network detection needs the full
+  // deduplicated (one row per real entity) list to compare against -- runs
+  // last, right before the ranking sort, so a down-ranked cluster member's
+  // discounted fitScore is what the sort actually orders by.
+  const withNetworkFlags = flagDuplicateEvidenceNetworks(withFinalFit);
+
+  return withNetworkFlags.sort(
+    (a, b) =>
+      STRENGTH_RANK[b.signalStrength] - STRENGTH_RANK[a.signalStrength] ||
+      Number(b.verified) - Number(a.verified) ||
+      b.fitScore - a.fitScore ||
+      b.confidence - a.confidence ||
+      b.sourceCount - a.sourceCount
+  );
 }
