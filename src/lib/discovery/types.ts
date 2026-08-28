@@ -221,6 +221,22 @@ export interface SourceItem {
   snippet: string;
   /** A real, authoritative entity name from the provider itself (e.g. a YouTube channel title) -- preferred over guessing one from the domain. Absent when the provider has no such identity (Serper/OpenAI web results). */
   entityName?: string;
+  /**
+   * Internal discovery-STRATEGY bucket used only for AI-verification-budget
+   * sampling (see classify.ts's sampleAcrossSources) -- never customer-facing
+   * and never equal to `source`/`platform`. Exists because one customer-facing
+   * `source` (e.g. "Web") can be fed by more than one distinct query strategy
+   * (a generic brand search AND a separate commercial-relationship search,
+   * see deepDiscovery/brandExpansion.ts) -- without this, sampleAcrossSources
+   * would group both strategies' results into one oversized "Web" bucket and
+   * give it the SAME single round-robin slot per round as a source fed by
+   * only one strategy (YouTube, OpenAI), starving it of a fair share of the
+   * fixed per-brand AI-classification budget for reasons having nothing to do
+   * with evidence quality. Optional and absent by default: Quick Scan's own
+   * SourceItems never set this, so sampleAcrossSources there keeps grouping
+   * by `source` exactly as before -- this is a Deep-Discovery-only distinction.
+   */
+  discoveryOrigin?: string;
 }
 
 /** Raw shape the LLM classifier is forced to return for a single source item. */

@@ -626,18 +626,33 @@ export function scoreUnverifiedIfSignal(items: SourceItem[], options: ScoreUnver
 
 /**
  * Picks up to `max` items for the AI classification call, sampling evenly
- * across providers (source) rather than taking the pool in raw order --
- * pool order happens to correlate with which source ran first
- * (Web/OpenAI/YouTube), so a naive prefix slice could send the AI call
- * nothing but Serper results and silently exclude every YouTube item from
- * ever being classified, regardless of what they actually contain.
+ * across discovery origins rather than taking the pool in raw order -- pool
+ * order happens to correlate with which origin ran first, so a naive prefix
+ * slice could send the AI call nothing but Serper results and silently
+ * exclude every YouTube item from ever being classified, regardless of what
+ * they actually contain.
+ *
+ * Groups by `item.discoveryOrigin ?? item.source`, NOT by `source`/`platform`
+ * alone -- a single customer-facing source can be fed by more than one
+ * distinct query strategy (Deep Discovery's brandExpansion.ts runs both a
+ * generic brand search AND a separate commercial-relationship search, both
+ * tagged source:"Web"). Grouping by the collapsed `source` gave that one
+ * combined "Web" bucket the SAME single round-robin slot per round as
+ * YouTube/OpenAI (each fed by exactly one strategy) -- so a source fed by two
+ * strategies got, in effect, half the per-strategy attention of a source fed
+ * by one, and whichever of its two strategies happened to be enumerated
+ * first in the merged pool was accidentally favored over the other. Grouping
+ * by discoveryOrigin instead gives every DISTINCT strategy its own fair
+ * round-robin slot -- Quick Scan's SourceItems never set discoveryOrigin, so
+ * this falls back to the exact previous behavior there.
  */
 export function sampleAcrossSources(pool: SourceItem[], max: number): SourceItem[] {
   const bySource = new Map<string, SourceItem[]>();
   for (const item of pool) {
-    const group = bySource.get(item.source);
+    const key = item.discoveryOrigin ?? item.source;
+    const group = bySource.get(key);
     if (group) group.push(item);
-    else bySource.set(item.source, [item]);
+    else bySource.set(key, [item]);
   }
   const groups = Array.from(bySource.values());
   const result: SourceItem[] = [];
