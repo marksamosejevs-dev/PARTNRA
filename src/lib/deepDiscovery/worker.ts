@@ -95,6 +95,24 @@ async function runComparableBrandExpansion(job: DiscoveryJobRow, signal: AbortSi
     )
   );
 
+  // The accumulated, deduplicated set of every brand this scan has EVER
+  // resolved (scan_brands links idempotently, so this only ever grows) --
+  // NOT just this run's own `brands.length`. Brand resolution is not
+  // perfectly deterministic across two separate calls (AI/search result
+  // variance), so a stale-job-recovery replay of this exact job can
+  // legitimately resolve a slightly different set than the first run did
+  // -- e.g. 14 brands in common plus one different 15th each time. Using
+  // only THIS run's count as the target (the pre-migration-0007 behavior)
+  // let comparable_brands_target regress to whichever run happened to
+  // write last, while comparable_brands_analysed correctly counted every
+  // distinct brand ever actually analysed across both runs -- producing a
+  // real "16 analysed / 15 target" in production despite migration 0006's
+  // job-level idempotency fix, since no single job row was ever literally
+  // duplicated here. Deriving target from the same accumulated table
+  // analysed is compared against makes analysed <= target true by
+  // construction, not by a UI clamp.
+  const allScanBrands = await getBrandsForScan(job.scan_id);
+
   // Safe even on a stale-job-recovery replay: the scans_prevent_status_regression
   // trigger (migration 0006) silently discards this ENTIRE update (not
   // just the status field) if the scan has already reached a terminal
@@ -103,7 +121,11 @@ async function runComparableBrandExpansion(job: DiscoveryJobRow, signal: AbortSi
   // below is separately idempotent, so a replay that DOES still apply
   // (scan genuinely not yet terminal) can't create duplicate per-brand
   // jobs either.
-  await updateScan(job.scan_id, { comparable_brands_target: brands.length, status: "running", started_at: scan.started_at ?? new Date().toISOString() });
+  await updateScan(job.scan_id, {
+    comparable_brands_target: allScanBrands.length,
+    status: "running",
+    started_at: scan.started_at ?? new Date().toISOString(),
+  });
 
   if (brands.length > 0) {
     await createDiscoveryJobs(brands.map((b) => ({ scanId: job.scan_id, jobType: "brand_relationship_expansion" as const, targetId: b.id })));
