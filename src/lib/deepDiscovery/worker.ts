@@ -10,8 +10,9 @@ import { DEEP_DISCOVERY_LIMITS } from "./limits";
 import {
   claimNextJob,
   reclaimStaleJobs,
-  completeJob,
+  completeDiscoveryJob,
   failJob,
+  JobCounterDeltas,
   getScan,
   getBusinessById,
   getBrandById,
@@ -20,7 +21,6 @@ import {
   linkScanBrand,
   getBrandsForScan,
   createDiscoveryJobs,
-  incrementScanCounters,
   appendScanWarning,
   countJobsByStatus,
   countJobsByType,
@@ -32,6 +32,12 @@ import {
   upsertOpportunity,
 } from "../graph/repository";
 import { DiscoveryJobRow } from "../graph/types";
+
+interface JobResult {
+  progress: Record<string, unknown>;
+  /** Only ever applied atomically together with this job's own completion (see completeDiscoveryJob) -- never as a side effect of merely running, so a retried/replayed job can never contribute these twice. */
+  counterDeltas: JobCounterDeltas;
+}
 
 /**
  * Job dispatcher (Section 6-7, 21-22). Deliberately bounded per job (see
@@ -55,7 +61,7 @@ async function loadProfile(businessId: string): Promise<{ profile: BusinessProfi
   return { profile: business.partner_intent_profile as unknown as BusinessProfile, businessId: business.id };
 }
 
-async function runComparableBrandExpansion(job: DiscoveryJobRow, signal: AbortSignal): Promise<Record<string, unknown>> {
+async function runComparableBrandExpansion(job: DiscoveryJobRow, signal: AbortSignal): Promise<JobResult> {
   const scan = await getScan(job.scan_id);
   if (!scan) throw new WorkerJobError(`scan ${job.scan_id} not found`);
   const { profile } = await loadProfile(scan.business_id);
@@ -89,16 +95,24 @@ async function runComparableBrandExpansion(job: DiscoveryJobRow, signal: AbortSi
     )
   );
 
+  // Safe even on a stale-job-recovery replay: the scans_prevent_status_regression
+  // trigger (migration 0006) silently discards this ENTIRE update (not
+  // just the status field) if the scan has already reached a terminal
+  // status -- an old comparable_brand_expansion job waking up can never
+  // reopen or corrupt an already-completed scan. createDiscoveryJobs
+  // below is separately idempotent, so a replay that DOES still apply
+  // (scan genuinely not yet terminal) can't create duplicate per-brand
+  // jobs either.
   await updateScan(job.scan_id, { comparable_brands_target: brands.length, status: "running", started_at: scan.started_at ?? new Date().toISOString() });
 
   if (brands.length > 0) {
     await createDiscoveryJobs(brands.map((b) => ({ scanId: job.scan_id, jobType: "brand_relationship_expansion" as const, targetId: b.id })));
   }
 
-  return { brandsResolved: brands.length };
+  return { progress: { brandsResolved: brands.length }, counterDeltas: {} };
 }
 
-async function runBrandRelationshipExpansion(job: DiscoveryJobRow, signal: AbortSignal): Promise<Record<string, unknown>> {
+async function runBrandRelationshipExpansion(job: DiscoveryJobRow, signal: AbortSignal): Promise<JobResult> {
   if (!job.target_id) throw new WorkerJobError("brand_relationship_expansion job has no target_id");
   const scan = await getScan(job.scan_id);
   if (!scan) throw new WorkerJobError(`scan ${job.scan_id} not found`);
@@ -110,13 +124,10 @@ async function runBrandRelationshipExpansion(job: DiscoveryJobRow, signal: Abort
 
   const result = await expandBrandRelationships({ businessId, brand, businessContext, intent, signal });
 
-  await incrementScanCounters(job.scan_id, {
-    comparableBrandsAnalysed: 1,
-    signalsReviewed: result.itemsSearched,
-    entityCount: result.entitiesUpserted,
-    relationshipCount: result.relationshipsUpserted,
-    opportunityCount: result.opportunitiesUpserted,
-  });
+  // Counter deltas are NOT applied here -- they're returned and only ever
+  // committed atomically together with THIS job's own completion (see
+  // completeDiscoveryJob), so a stale-job-recovery replay of this exact
+  // job can never count the same brand's contribution twice.
   for (const warning of result.warnings) await appendScanWarning(job.scan_id, warning);
 
   // Bounded follow-up jobs (Section 34: one hop, configurable max) --
@@ -142,10 +153,19 @@ async function runBrandRelationshipExpansion(job: DiscoveryJobRow, signal: Abort
   }
   if (followUps.length > 0) await createDiscoveryJobs(followUps);
 
-  return result as unknown as Record<string, unknown>;
+  return {
+    progress: result as unknown as Record<string, unknown>,
+    counterDeltas: {
+      comparableBrandsAnalysed: 1,
+      signalsReviewed: result.itemsSearched,
+      entityCount: result.entitiesUpserted,
+      relationshipCount: result.relationshipsUpserted,
+      opportunityCount: result.opportunitiesUpserted,
+    },
+  };
 }
 
-async function runEntityExpansion(job: DiscoveryJobRow, signal: AbortSignal): Promise<Record<string, unknown>> {
+async function runEntityExpansion(job: DiscoveryJobRow, signal: AbortSignal): Promise<JobResult> {
   if (!job.target_id) throw new WorkerJobError("entity_expansion job has no target_id");
   const scan = await getScan(job.scan_id);
   if (!scan) throw new WorkerJobError(`scan ${job.scan_id} not found`);
@@ -165,6 +185,10 @@ async function runEntityExpansion(job: DiscoveryJobRow, signal: AbortSignal): Pr
   const result = await expandEntityAcrossBrands({ entity, candidateBrands, businessContext, intent, signal });
   for (const warning of result.warnings) await appendScanWarning(job.scan_id, warning);
 
+  // Same non-applied-here rule as runBrandRelationshipExpansion -- this
+  // delta is only ever committed atomically with this job's own
+  // completion, never as a side effect of running.
+  let relationshipCountDelta = 0;
   if (result.newRelationshipsFound > 0) {
     // Cross-brand corroboration just changed for this entity -- recompute
     // its Fit V2/tier and refresh the Opportunity (upsert_opportunity
@@ -189,14 +213,14 @@ async function runEntityExpansion(job: DiscoveryJobRow, signal: AbortSignal): Pr
         actionability: existing.actionability,
         qualityTier: tier,
       });
-      await incrementScanCounters(job.scan_id, { relationshipCount: result.newRelationshipsFound });
+      relationshipCountDelta = result.newRelationshipsFound;
     }
   }
 
-  return result as unknown as Record<string, unknown>;
+  return { progress: result as unknown as Record<string, unknown>, counterDeltas: { relationshipCount: relationshipCountDelta } };
 }
 
-async function runContactEnrichment(job: DiscoveryJobRow): Promise<Record<string, unknown>> {
+async function runContactEnrichment(job: DiscoveryJobRow): Promise<JobResult> {
   if (!job.target_id) throw new WorkerJobError("contact_enrichment job has no target_id");
   const entity = await getEntityById(job.target_id);
   if (!entity) throw new WorkerJobError(`entity ${job.target_id} not found`);
@@ -205,10 +229,10 @@ async function runContactEnrichment(job: DiscoveryJobRow): Promise<Record<string
   if (contact || contactPage) {
     await updateEntityContact(entity.id, { publicContact: contact, contactPage });
   }
-  return { contactFound: !!contact };
+  return { progress: { contactFound: !!contact }, counterDeltas: {} };
 }
 
-async function dispatchJob(job: DiscoveryJobRow, signal: AbortSignal): Promise<Record<string, unknown>> {
+async function dispatchJob(job: DiscoveryJobRow, signal: AbortSignal): Promise<JobResult> {
   switch (job.job_type) {
     case "comparable_brand_expansion":
       return runComparableBrandExpansion(job, signal);
@@ -257,16 +281,25 @@ export async function processNextJob(): Promise<{ processed: boolean; jobType?: 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), JOB_TIMEOUT_MS);
   try {
-    const progress = await dispatchJob(job, controller.signal);
-    await completeJob(job.id, progress);
-    await maybeFinalizeScan(job.scan_id);
+    const { progress, counterDeltas } = await dispatchJob(job, controller.signal);
+    // completeDiscoveryJob atomically marks this exact job row completed
+    // AND applies counterDeltas, guarded on the row still being 'running'
+    // -- see migration 0006. A null return means this specific row was
+    // already terminal (not reachable via the normal claim path, but kept
+    // as a hard guarantee): its contribution was already counted by
+    // whichever call actually transitioned it, so finalization is skipped
+    // here too -- nothing changed for this scan just now.
+    const completed = await completeDiscoveryJob(job.id, progress, counterDeltas);
+    if (completed) await maybeFinalizeScan(job.scan_id);
     return { processed: true, jobType: job.job_type };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     try {
-      await failJob(job.id, message);
-      await appendScanWarning(job.scan_id, `${job.job_type} failed: ${message}`);
-      await maybeFinalizeScan(job.scan_id);
+      const failed = await failJob(job.id, message);
+      if (failed) {
+        await appendScanWarning(job.scan_id, `${job.job_type} failed: ${message}`);
+        await maybeFinalizeScan(job.scan_id);
+      }
     } catch {
       // Best-effort bookkeeping only -- the job's own failure is the real
       // signal; a failure while RECORDING that failure must not throw and

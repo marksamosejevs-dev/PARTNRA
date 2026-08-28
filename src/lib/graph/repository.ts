@@ -350,28 +350,13 @@ export async function getScan(id: string): Promise<ScanRow | null> {
   return data;
 }
 
-/** Atomic (see the increment_scan_counters migration) -- safe even if worker ticks for the same scan ever overlap. Real, persisted progress counters (Section 22) -- never a client-side fake percentage. */
-export async function incrementScanCounters(
-  scanId: string,
-  deltas: {
-    comparableBrandsAnalysed?: number;
-    signalsReviewed?: number;
-    entityCount?: number;
-    relationshipCount?: number;
-    opportunityCount?: number;
-  }
-): Promise<ScanRow> {
-  const supabase = getGraphClient();
-  const result = await supabase.rpc("increment_scan_counters", {
-    p_scan_id: scanId,
-    p_comparable_brands_analysed: deltas.comparableBrandsAnalysed ?? 0,
-    p_signals_reviewed: deltas.signalsReviewed ?? 0,
-    p_entity_count: deltas.entityCount ?? 0,
-    p_relationship_count: deltas.relationshipCount ?? 0,
-    p_opportunity_count: deltas.opportunityCount ?? 0,
-  });
-  return unwrap(result, "incrementScanCounters");
-}
+// There is deliberately no standalone incrementScanCounters export here
+// anymore -- increment_scan_counters (the RPC) is now only ever called
+// from INSIDE complete_discovery_job (migration 0006), atomically guarded
+// on the job's own 'running' -> 'completed' transition. A separate JS-level
+// wrapper that could increment counters outside that guard would be a
+// standing invitation to reintroduce the exact double-counting bug this
+// fixed (see completeDiscoveryJob below).
 
 export async function appendScanWarning(scanId: string, warning: string): Promise<void> {
   const supabase = getGraphClient();
@@ -381,17 +366,27 @@ export async function appendScanWarning(scanId: string, warning: string): Promis
 
 // ------------------------------------------------------------ discovery_jobs
 
+/**
+ * Idempotent by (scan_id, job_type, target_id) -- see
+ * discovery_jobs_identity_idx (migration 0006). Calling this again with a
+ * job spec that already exists (a genuine retry/replay after stale-job
+ * recovery, or the same entity legitimately earning a follow-up job from
+ * more than one brand in the same scan) silently skips the duplicate
+ * rather than creating a second row that would double-count that job's
+ * contribution to the scan's aggregate counters. Returns only the rows
+ * actually inserted -- callers that don't need to know which ones were
+ * new (all current callers) simply ignore the return value.
+ */
 export async function createDiscoveryJobs(
   inputs: Array<{ scanId: string; jobType: DiscoveryJobType; targetId?: string | null }>
 ): Promise<DiscoveryJobRow[]> {
   if (inputs.length === 0) return [];
   const supabase = getGraphClient();
-  const result = await supabase
-    .from("discovery_jobs")
-    .insert(inputs.map((i) => ({ scan_id: i.scanId, job_type: i.jobType, target_id: i.targetId ?? null })))
-    .select();
-  if (result.error) throw new GraphError(`createDiscoveryJobs: ${result.error.message}`);
-  return result.data ?? [];
+  const { data, error } = await supabase.rpc("create_discovery_jobs_idempotent", {
+    p_jobs: inputs.map((i) => ({ scan_id: i.scanId, job_type: i.jobType, target_id: i.targetId ?? null })),
+  });
+  if (error) throw new GraphError(`createDiscoveryJobs: ${error.message}`);
+  return data ?? [];
 }
 
 /** Atomic claim (Postgres `FOR UPDATE SKIP LOCKED` under the hood) -- safe when multiple worker invocations overlap. Returns null once the queue is empty (or every remaining job has exhausted maxAttempts). */
@@ -406,21 +401,57 @@ export async function claimNextJob(maxAttempts = 3): Promise<DiscoveryJobRow | n
   return data;
 }
 
-export async function completeJob(id: string, progress?: Record<string, unknown>): Promise<void> {
-  const supabase = getGraphClient();
-  const patch: Record<string, unknown> = { status: "completed", completed_at: new Date().toISOString() };
-  if (progress) patch.progress = progress;
-  const { error } = await supabase.from("discovery_jobs").update(patch).eq("id", id);
-  if (error) throw new GraphError(`completeJob: ${error.message}`);
+export interface JobCounterDeltas {
+  comparableBrandsAnalysed?: number;
+  signalsReviewed?: number;
+  entityCount?: number;
+  relationshipCount?: number;
+  opportunityCount?: number;
 }
 
-export async function failJob(id: string, errorMessage: string): Promise<void> {
+/**
+ * Atomically marks a job completed AND applies its scan-counter deltas --
+ * see complete_discovery_job (migration 0006). The two used to be
+ * separate steps (increment counters mid-job, mark completed afterward);
+ * a process dying in between left the counters durably incremented while
+ * the job stayed 'running' forever, which stale-job recovery would then
+ * replay -- incrementing the SAME counters again. Guarded on `status =
+ * 'running'` inside the RPC, so a replay of an already-completed job (not
+ * reachable via the normal claim path, but a hard guarantee here
+ * regardless) contributes nothing the second time. Returns null if the
+ * job was not actually transitioned (already completed/failed) -- callers
+ * use this to skip redundant finalization-check/warning work on a no-op
+ * replay.
+ */
+export async function completeDiscoveryJob(
+  id: string,
+  progress: Record<string, unknown>,
+  deltas: JobCounterDeltas = {}
+): Promise<DiscoveryJobRow | null> {
   const supabase = getGraphClient();
-  const { error } = await supabase
-    .from("discovery_jobs")
-    .update({ status: "failed", completed_at: new Date().toISOString(), error: errorMessage.slice(0, 2000) })
-    .eq("id", id);
+  const { data, error } = await supabase
+    .rpc("complete_discovery_job", {
+      p_job_id: id,
+      p_progress: progress,
+      p_comparable_brands_analysed: deltas.comparableBrandsAnalysed ?? 0,
+      p_signals_reviewed: deltas.signalsReviewed ?? 0,
+      p_entity_count: deltas.entityCount ?? 0,
+      p_relationship_count: deltas.relationshipCount ?? 0,
+      p_opportunity_count: deltas.opportunityCount ?? 0,
+    })
+    .single();
+  if (error) throw new GraphError(`completeDiscoveryJob: ${error.message}`);
+  const row = data as DiscoveryJobRow;
+  return row.id == null ? null : row;
+}
+
+/** Guarded the same way as completeDiscoveryJob -- see fail_discovery_job (migration 0006). Returns null if the job was already terminal (a replay), so the caller can skip appending a duplicate scan warning. */
+export async function failJob(id: string, errorMessage: string): Promise<DiscoveryJobRow | null> {
+  const supabase = getGraphClient();
+  const { data, error } = await supabase.rpc("fail_discovery_job", { p_job_id: id, p_error: errorMessage }).single();
   if (error) throw new GraphError(`failJob: ${error.message}`);
+  const row = data as DiscoveryJobRow;
+  return row.id == null ? null : row;
 }
 
 /** Re-queues a job for another attempt (e.g. a transient provider timeout) rather than marking it permanently failed -- claim_next_job's own `attempts < max_attempts` guard is what eventually stops the retries. */
