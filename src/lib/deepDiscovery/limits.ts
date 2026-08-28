@@ -14,6 +14,20 @@ export const DEEP_DISCOVERY_LIMITS = {
   maxSearchResultsPerBrand: 30,
   maxEntitiesSentToAiVerificationPerBrand: 15,
   maxContactEnrichmentsPerScan: 20,
+  /**
+   * A candidate that overflowed the per-brand AI-classification budget (see
+   * classify.ts's sampleAcrossSources) is only worth a follow-up
+   * relationship_verification job if its deterministic (unverified) fitScore
+   * already clears the "good" floor (see qualification.ts's
+   * qualityTierForFit) -- i.e. it would ALREADY be good/strong today if only
+   * it had been verified. A candidate that scores poorly even ignoring
+   * verification isn't worth spending a second AI call on.
+   */
+  overflowVerificationMinFit: 50,
+  /** Bounds total relationship_verification jobs a single scan can enqueue -- cost stays predictable regardless of how many candidates overflow. */
+  maxRelationshipVerificationsPerScan: 20,
+  /** Bounds how many of one entity's unverified relationships a single relationship_verification job re-checks -- an entity rarely has more than a handful within one scan, but this keeps a single job's own cost/duration bounded regardless. */
+  maxRelationshipsPerVerificationJob: 5,
   /** One bounded worker tick (see netlify/functions/deep-discovery-worker.ts) processes at most this many jobs before returning, so a single invocation can't run indefinitely. */
   maxJobsPerWorkerTick: 8,
   maxJobAttempts: 3,

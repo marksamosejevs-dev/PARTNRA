@@ -76,6 +76,52 @@ function hostnameOf(url: string | null): string | null {
   }
 }
 
+/**
+ * Discovery-STRATEGY tag (see SourceItem.discoveryOrigin) for each of the
+ * four searches this function runs -- "web-generic"/"web-commercial" are
+ * deliberately distinct even though both persist as the SAME customer-facing
+ * sourcePlatform ("Web") later; see classify.ts's sampleAcrossSources for why
+ * this split exists (fair per-strategy AI-verification-budget sampling).
+ */
+export type DiscoveryOrigin = "web-generic" | "web-commercial" | "openai" | "youtube";
+
+/**
+ * Tags each item with a discoveryOrigin distinct from its customer-facing
+ * `source`/`platform` (both web-generic and web-commercial persist as
+ * sourcePlatform "Web" later -- see SourceItem.discoveryOrigin) so
+ * sampleAcrossSources gives each of the four QUERY STRATEGIES its own fair
+ * round-robin slot, rather than letting the two Web strategies compete as
+ * one collapsed bucket against YouTube/OpenAI's single strategy each.
+ * Exported for direct unit testing (see brandExpansion.test.ts) -- never
+ * mutates its input, never changes `source`/`platform`.
+ */
+export function tagOrigin(items: SourceItem[], discoveryOrigin: DiscoveryOrigin): SourceItem[] {
+  return items.map((item) => ({ ...item, discoveryOrigin }));
+}
+
+export function tallyByOrigin(items: SourceItem[]): Record<string, number> {
+  const tally: Record<string, number> = {};
+  for (const item of items) {
+    const key = item.discoveryOrigin ?? item.source;
+    tally[key] = (tally[key] ?? 0) + 1;
+  }
+  return tally;
+}
+
+/**
+ * Internal observability only (Section: silent degradation must stop) --
+ * never customer-facing. Rides along in discovery_jobs.progress (see
+ * worker.ts) so a real deployed scan's origin-fairness and overflow rate is
+ * queryable after the fact without guessing from aggregate counters alone.
+ */
+export interface OriginTelemetry {
+  discoveredByOrigin: Record<string, number>;
+  sentToVerificationByOrigin: Record<string, number>;
+  overflowedByOrigin: Record<string, number>;
+  /** The batch AI classification call for this brand's sampled input failed/timed out -- the whole sampled batch fell back to scoreUnverified, not just the overflow. */
+  classifyCallFailed: boolean;
+}
+
 export interface BrandExpansionResult {
   itemsSearched: number;
   entitiesUpserted: number;
@@ -83,6 +129,17 @@ export interface BrandExpansionResult {
   opportunitiesUpserted: number;
   /** Entity ids that got a fresh Opportunity from THIS run -- what worker.ts uses to decide which entities are worth a bounded entity-expansion / contact-enrichment follow-up job (never every touched entity, only ones already worth showing). */
   opportunityEntityIds: string[];
+  /**
+   * Entity ids whose Opportunity was persisted as quality_tier "weak" SOLELY
+   * because the underlying candidate was never AI-verified (overflowed the
+   * classification budget, or the whole batch call failed) -- NOT because
+   * its actual signal is weak (see limits.ts's overflowVerificationMinFit).
+   * worker.ts uses this to enqueue a bounded relationship_verification
+   * follow-up job so these aren't permanently mislabeled just because they
+   * were candidate #16 (Section: overflow must not equal "throw away").
+   */
+  entitiesNeedingVerification: string[];
+  telemetry: OriginTelemetry;
   warnings: string[];
 }
 
@@ -110,7 +167,12 @@ export async function expandBrandRelationships(params: {
       [] as SourceItem[]
     ),
   ]);
-  const combined: SourceItem[] = [...webResult, ...openaiResult, ...youtubeResult, ...commercialResult];
+  const combined: SourceItem[] = [
+    ...tagOrigin(webResult, "web-generic"),
+    ...tagOrigin(openaiResult, "openai"),
+    ...tagOrigin(youtubeResult, "youtube"),
+    ...tagOrigin(commercialResult, "web-commercial"),
+  ];
 
   const pool: SourceItem[] = [];
   const seenUrls = new Set<string>();
@@ -124,14 +186,27 @@ export async function expandBrandRelationships(params: {
     if (pool.length >= DEEP_DISCOVERY_LIMITS.maxSearchResultsPerBrand) break;
   }
 
+  const discoveredByOrigin = tallyByOrigin(pool);
   if (pool.length === 0) {
-    return { itemsSearched: combined.length, entitiesUpserted: 0, relationshipsUpserted: 0, opportunitiesUpserted: 0, opportunityEntityIds: [], warnings };
+    return {
+      itemsSearched: combined.length,
+      entitiesUpserted: 0,
+      relationshipsUpserted: 0,
+      opportunitiesUpserted: 0,
+      opportunityEntityIds: [],
+      entitiesNeedingVerification: [],
+      telemetry: { discoveredByOrigin, sentToVerificationByOrigin: {}, overflowedByOrigin: {}, classifyCallFailed: false },
+      warnings,
+    };
   }
 
   const classifyInput = sampleAcrossSources(pool, Math.min(MAX_CLASSIFY_INPUT, DEEP_DISCOVERY_LIMITS.maxEntitiesSentToAiVerificationPerBrand));
   const overflow = pool.filter((i) => !classifyInput.includes(i));
+  const sentToVerificationByOrigin = tallyByOrigin(classifyInput);
+  const overflowedByOrigin = tallyByOrigin(overflow);
   const categoryPhrases = [businessContext.category, ...concepts].filter((p): p is string => !!p);
 
+  let classifyCallFailed = false;
   let classified: ClassifiedResult[];
   try {
     classified = await raceWithTimeout(
@@ -145,17 +220,23 @@ export async function expandBrandRelationships(params: {
     // the same deterministic, honestly-unverified fallback Quick Scan uses,
     // over the FULL pool (never just drop what didn't reach the AI call).
     warnings.push(`AI classification failed/timed out for ${brand.name}: ${err instanceof Error ? err.message : String(err)}`);
+    classifyCallFailed = true;
     classified = scoreUnverified(pool, { intent, market: businessContext.market, businessModel: businessContext.businessModel });
   }
   // Overflow items never sent to the AI classifier still get an honest,
   // clearly-unverified deterministic score -- real discovered signal is
-  // never simply discarded.
-  if (overflow.length > 0) {
+  // never simply discarded. (Not double-scored when the whole batch call
+  // above already failed and scored the FULL pool, overflow included.)
+  if (overflow.length > 0 && !classifyCallFailed) {
     classified = [
       ...classified,
       ...scoreUnverified(overflow, { categoryPhrases, intent, market: businessContext.market, businessModel: businessContext.businessModel }),
     ];
   }
+  const telemetry: OriginTelemetry = { discoveredByOrigin, sentToVerificationByOrigin, overflowedByOrigin, classifyCallFailed };
+  console.log(
+    JSON.stringify({ stage: "deep_discovery_origin_sampling", brandId: brand.id, brandName: brand.name, ...telemetry })
+  );
 
   let deduped = dedupeCandidates(classified, intent, businessContext.market, businessContext.businessModel);
   if (brandDomain) {
@@ -166,6 +247,7 @@ export async function expandBrandRelationships(params: {
   let relationshipsUpserted = 0;
   let opportunitiesUpserted = 0;
   const opportunityEntityIds: string[] = [];
+  const entitiesNeedingVerification = new Set<string>();
 
   for (const candidate of deduped) {
     // The job-level budget (see worker.ts's JOB_TIMEOUT_MS) has already
@@ -238,6 +320,18 @@ export async function expandBrandRelationships(params: {
       });
       const tier = deepQualityTier(deepFit, candidate.evidenceConfidence);
 
+      // This candidate was never AI-verified (overflowed the classification
+      // budget, or the whole batch call failed) -- see
+      // evidenceConfidenceLabel's unconditional "weak" whenever !verified --
+      // but its OWN deterministic fitScore already clears the "good" floor,
+      // meaning verification alone (not a better fitScore) is the only thing
+      // standing between it and its real tier. Queue it for a bounded
+      // relationship_verification follow-up rather than leaving today's
+      // cost-control sampling outcome as its permanent, final label.
+      if (!candidate.verified && deepFit >= DEEP_DISCOVERY_LIMITS.overflowVerificationMinFit) {
+        entitiesNeedingVerification.add(entity.id);
+      }
+
       await upsertOpportunity({
         businessId,
         entityId: entity.id,
@@ -259,5 +353,14 @@ export async function expandBrandRelationships(params: {
     }
   }
 
-  return { itemsSearched: combined.length, entitiesUpserted, relationshipsUpserted, opportunitiesUpserted, opportunityEntityIds, warnings };
+  return {
+    itemsSearched: combined.length,
+    entitiesUpserted,
+    relationshipsUpserted,
+    opportunitiesUpserted,
+    opportunityEntityIds,
+    entitiesNeedingVerification: Array.from(entitiesNeedingVerification),
+    telemetry,
+    warnings,
+  };
 }

@@ -3,6 +3,7 @@ import { resolveCompetitorDomain } from "../discovery/competitors";
 import { expandComparableBrandNames, resolveComparableBrands } from "./comparableBrands";
 import { expandBrandRelationships } from "./brandExpansion";
 import { expandEntityAcrossBrands } from "./entityExpansion";
+import { verifyEntityRelationships } from "./relationshipVerification";
 import { enrichEntityContact } from "./contactEnrichment";
 import { selectDeepPreviewCandidate } from "./preview";
 import { computeDeepFitScore, deepQualityTier } from "./fitV2";
@@ -155,13 +156,22 @@ async function runBrandRelationshipExpansion(job: DiscoveryJobRow, signal: Abort
   // Bounded follow-up jobs (Section 34: one hop, configurable max) --
   // only for entities that ALREADY earned a real Opportunity from this
   // brand, and only while the scan-wide caps still have room.
-  const followUps: Array<{ scanId: string; jobType: "entity_expansion" | "contact_enrichment"; targetId: string }> = [];
-  const [entityExpansionCount, contactEnrichmentCount] = await Promise.all([
+  const followUps: Array<{
+    scanId: string;
+    jobType: "entity_expansion" | "contact_enrichment" | "relationship_verification";
+    targetId: string;
+  }> = [];
+  const [entityExpansionCount, contactEnrichmentCount, relationshipVerificationCount] = await Promise.all([
     countJobsByType(job.scan_id, "entity_expansion"),
     countJobsByType(job.scan_id, "contact_enrichment"),
+    countJobsByType(job.scan_id, "relationship_verification"),
   ]);
   let entityExpansionsToAdd = Math.max(DEEP_DISCOVERY_LIMITS.maxEntityExpansionsPerScan - entityExpansionCount, 0);
   let contactEnrichmentsToAdd = Math.max(DEEP_DISCOVERY_LIMITS.maxContactEnrichmentsPerScan - contactEnrichmentCount, 0);
+  let relationshipVerificationsToAdd = Math.max(
+    DEEP_DISCOVERY_LIMITS.maxRelationshipVerificationsPerScan - relationshipVerificationCount,
+    0
+  );
 
   for (const entityId of result.opportunityEntityIds) {
     if (entityExpansionsToAdd > 0) {
@@ -172,6 +182,17 @@ async function runBrandRelationshipExpansion(job: DiscoveryJobRow, signal: Abort
       followUps.push({ scanId: job.scan_id, jobType: "contact_enrichment", targetId: entityId });
       contactEnrichmentsToAdd--;
     }
+  }
+  // Candidates that overflowed the AI-verification budget but already show
+  // a real (unverified) fitScore worth confirming -- see brandExpansion.ts's
+  // entitiesNeedingVerification and limits.ts's overflowVerificationMinFit.
+  // createDiscoveryJobs is idempotent on (scan_id, job_type, target_id), so
+  // the SAME entity surfacing from more than one brand this scan still
+  // enqueues at most one relationship_verification job for it.
+  for (const entityId of result.entitiesNeedingVerification) {
+    if (relationshipVerificationsToAdd <= 0) break;
+    followUps.push({ scanId: job.scan_id, jobType: "relationship_verification", targetId: entityId });
+    relationshipVerificationsToAdd--;
   }
   if (followUps.length > 0) await createDiscoveryJobs(followUps);
 
@@ -242,6 +263,36 @@ async function runEntityExpansion(job: DiscoveryJobRow, signal: AbortSignal): Pr
   return { progress: result as unknown as Record<string, unknown>, counterDeltas: { relationshipCount: relationshipCountDelta } };
 }
 
+async function runRelationshipVerification(job: DiscoveryJobRow, signal: AbortSignal): Promise<JobResult> {
+  if (!job.target_id) throw new WorkerJobError("relationship_verification job has no target_id");
+  const scan = await getScan(job.scan_id);
+  if (!scan) throw new WorkerJobError(`scan ${job.scan_id} not found`);
+  const entity = await getEntityById(job.target_id);
+  if (!entity) throw new WorkerJobError(`entity ${job.target_id} not found`);
+  const { profile, businessId } = await loadProfile(scan.business_id);
+  const businessContext = buildBusinessContext(profile);
+  const intent = buildPartnerTypeIntent(profile);
+
+  const scanBrands = await getBrandsForScan(job.scan_id);
+  const scanBrandIds = new Set(scanBrands.map((b) => b.id));
+
+  const result = await verifyEntityRelationships({ entity, businessId, scanBrandIds, businessContext, intent, signal });
+  // A relationship staying unverified (AI still says no, or the call
+  // degraded) is an honest outcome, not a job failure -- no scan warning for
+  // that. Only a genuine per-relationship error is worth a warning; a scan
+  // resting on nothing but overflow-verification jobs whose evidence
+  // legitimately never verifies is exactly what `completed_with_warnings`
+  // covers, never a reason to keep a scan running.
+  for (const warning of result.warnings) await appendScanWarning(job.scan_id, warning);
+
+  // No scan-wide counters change here -- this only refines an ALREADY
+  // persisted relationship/opportunity's verified/evidence_confidence/
+  // quality_tier, it never creates a new entity/relationship/opportunity
+  // (that would double-count against comparableBrandsAnalysed/opportunityCount,
+  // which are already accounted for by the original brand_relationship_expansion job).
+  return { progress: result as unknown as Record<string, unknown>, counterDeltas: {} };
+}
+
 async function runContactEnrichment(job: DiscoveryJobRow): Promise<JobResult> {
   if (!job.target_id) throw new WorkerJobError("contact_enrichment job has no target_id");
   const entity = await getEntityById(job.target_id);
@@ -262,6 +313,8 @@ async function dispatchJob(job: DiscoveryJobRow, signal: AbortSignal): Promise<J
       return runBrandRelationshipExpansion(job, signal);
     case "entity_expansion":
       return runEntityExpansion(job, signal);
+    case "relationship_verification":
+      return runRelationshipVerification(job, signal);
     case "contact_enrichment":
       return runContactEnrichment(job);
     default:
