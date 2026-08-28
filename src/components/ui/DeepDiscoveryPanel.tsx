@@ -13,10 +13,17 @@ import { Arrow } from "./Arrow";
  * worker whether or not this component is even mounted, and the
  * `scanId` pointer below (never the results themselves) is the only
  * thing that survives a refresh client-side -- Supabase, reached via the
- * status API, remains the sole source of truth for status/results.
+ * status/results APIs, remains the sole source of truth.
+ *
+ * Results are a real, ranked, paginated list (not a single "preview"
+ * card) -- fetched once when the scan reaches a terminal status, and
+ * again only on an explicit "Load more" click. The status endpoint keeps
+ * polling lightweight (a cheap count, never the full result set) while
+ * the scan is still running.
  */
 
 const POLL_INTERVAL_MS = 4000;
+const RESULTS_PAGE_SIZE = 20;
 const POINTER_STORAGE_KEY = "partnra:deepDiscoveryPointer";
 
 type PanelStatus =
@@ -36,31 +43,42 @@ interface DeepDiscoveryProgress {
   signalsReviewed: number;
   entitiesResolved: number;
   relationshipsFound: number;
+  /** The real, user-facing count -- quality_tier != 'weak', the same bar the results list itself uses. Never scan.opportunity_count directly. */
   opportunitiesQualified: number;
   jobsQueued: number;
   jobsRunning: number;
 }
 
-interface DeepDiscoveryPreview {
-  name: string | null;
+interface StatusResponse {
+  status: string;
+  progress: DeepDiscoveryProgress;
+  warnings: unknown[];
+  error: string | null;
+}
+
+export interface QualifiedOpportunityItem {
+  entityId: string;
+  name: string;
   partnerType: string | null;
-  relationshipDirection: string;
-  geographicFit: string;
   partnraFit: number;
-  evidenceConfidence: "strong" | "medium" | "weak";
+  geographicFit: string;
+  relationshipDirection: string;
+  evidenceConfidence: string;
   qualityTier: string;
   potentialRelationship: string | null;
   applicationUrl: string | null;
   contact: string | null;
+  comparableBrands: string[];
+  crossBrandCount: number;
+  evidenceUrl: string | null;
+  sourcePlatform: string | null;
 }
 
-interface StatusResponse {
-  status: string;
-  progress: DeepDiscoveryProgress;
-  preview: DeepDiscoveryPreview | null;
-  additionalOpportunityCount: number;
-  warnings: unknown[];
-  error: string | null;
+interface ResultsResponse {
+  items: QualifiedOpportunityItem[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
 }
 
 export interface DeepDiscoveryPointer {
@@ -123,6 +141,55 @@ function humanizeDirection(direction: string): string {
   return direction.replace(/_/g, " ");
 }
 
+function humanizeFit(fit: string): string {
+  return fit.replace(/_/g, " ");
+}
+
+function OpportunityResultCard({ item }: { item: QualifiedOpportunityItem }) {
+  return (
+    <div className="rounded-xl border border-ink/8 bg-paper/70 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-display text-base font-medium text-ink">{item.name || "Unnamed entity"}</span>
+        {item.partnerType && (
+          <span className="font-mono-label rounded-full bg-lime/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-ink/70">
+            {item.partnerType}
+          </span>
+        )}
+        <span className="font-mono-label rounded-full bg-ink/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-ink/50">
+          Evidence: {item.evidenceConfidence}
+        </span>
+        {item.sourcePlatform && (
+          <span className="font-mono-label rounded-full bg-ink/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-ink/50">
+            {item.sourcePlatform}
+          </span>
+        )}
+      </div>
+      <p className="mt-2 text-sm text-ink/60">
+        {humanizeDirection(item.relationshipDirection)} · {humanizeFit(item.geographicFit)} market fit · Partnra Fit {item.partnraFit}
+      </p>
+      {item.potentialRelationship && <p className="mt-2 text-sm text-ink/70">{item.potentialRelationship}</p>}
+      {item.comparableBrands.length > 0 && (
+        <p className="font-mono-label mt-2 text-[11px] uppercase tracking-[0.1em] text-ink/40">
+          Connected to {item.crossBrandCount} comparable brand{item.crossBrandCount === 1 ? "" : "s"}: {item.comparableBrands.join(", ")}
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-3 text-sm">
+        {item.applicationUrl && (
+          <a href={item.applicationUrl} target="_blank" rel="noreferrer" className="font-semibold text-ink underline underline-offset-4">
+            View application route
+          </a>
+        )}
+        {item.evidenceUrl && (
+          <a href={item.evidenceUrl} target="_blank" rel="noreferrer" className="text-ink/60 underline underline-offset-4">
+            View evidence source
+          </a>
+        )}
+        {item.contact && <span className="text-ink/55">Contact: {item.contact}</span>}
+      </div>
+    </div>
+  );
+}
+
 export function DeepDiscoveryPanel({
   domain,
   initialScanId,
@@ -139,6 +206,11 @@ export function DeepDiscoveryPanel({
   const [data, setData] = useState<StatusResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const requestIdRef = useRef(0);
+
+  const [results, setResults] = useState<QualifiedOpportunityItem[]>([]);
+  const [resultsHasMore, setResultsHasMore] = useState(false);
+  const [resultsLoading, setResultsLoading] = useState(false);
+  const [resultsError, setResultsError] = useState(false);
 
   const isTerminal = isTerminalPanelStatus(status);
 
@@ -192,6 +264,69 @@ export function DeepDiscoveryPanel({
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [scanId, isTerminal, onScanCleared]);
+
+  // Results are fetched exactly once per terminal transition (never on a
+  // polling tick, and never re-fetched just because `data` was replaced by
+  // an identical-looking terminal response) -- deliberately separate from
+  // the lightweight status poll above, per the "don't download the full
+  // result set on every 4-second tick" requirement.
+  useEffect(() => {
+    if (!scanId || !isTerminal) return;
+    // Nothing to fetch -- a provably-zero qualified count never needs a
+    // network round trip just to confirm an empty list.
+    if (data?.progress.opportunitiesQualified === 0) return;
+    let cancelled = false;
+
+    async function loadFirstPage() {
+      setResultsLoading(true);
+      setResultsError(false);
+      try {
+        const res = await fetch(`/api/deep-discovery/results/${scanId}?limit=${RESULTS_PAGE_SIZE}&offset=0`, { cache: "no-store" });
+        if (cancelled) return;
+        if (!res.ok) {
+          setResultsError(true);
+          return;
+        }
+        const json = (await res.json()) as ResultsResponse;
+        if (cancelled) return;
+        setResults(json.items);
+        setResultsHasMore(json.hasMore);
+      } catch {
+        if (!cancelled) setResultsError(true);
+      } finally {
+        if (!cancelled) setResultsLoading(false);
+      }
+    }
+
+    loadFirstPage();
+    return () => {
+      cancelled = true;
+    };
+    // data.progress.opportunitiesQualified is intentionally included: it's
+    // stable by the time this effect can run (isTerminal only flips true in
+    // the same poll that sets its final value, and polling then stops), so
+    // this never causes a second fetch -- it's here only so the "skip
+    // fetching a provably-empty result set" check above is honestly
+    // reflected in the dependency array.
+  }, [scanId, isTerminal, data?.progress.opportunitiesQualified]);
+
+  async function loadMoreResults() {
+    if (!scanId || resultsLoading) return;
+    setResultsLoading(true);
+    try {
+      const res = await fetch(`/api/deep-discovery/results/${scanId}?limit=${RESULTS_PAGE_SIZE}&offset=${results.length}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const json = (await res.json()) as ResultsResponse;
+      setResults((prev) => [...prev, ...json.items]);
+      setResultsHasMore(json.hasMore);
+    } catch {
+      // Leave the existing page visible -- the button just stays available to retry.
+    } finally {
+      setResultsLoading(false);
+    }
+  }
 
   async function start() {
     setStatus("starting");
@@ -286,53 +421,45 @@ export function DeepDiscoveryPanel({
             : `${p.comparableBrandsAnalysed} of ${p.comparableBrandsTarget} comparable brands analysed`
           : "Expanding comparable brands..."}
         {p.signalsReviewed > 0 ? ` · ${p.signalsReviewed} public signals reviewed` : ""}
-        {p.entitiesResolved > 0 ? ` · ${p.entitiesResolved} entities resolved` : ""}
-        {p.opportunitiesQualified > 0 ? ` · ${p.opportunitiesQualified} qualified opportunit${p.opportunitiesQualified === 1 ? "y" : "ies"}` : ""}
+        {isTerminal ? ` · ${p.opportunitiesQualified} qualified opportunit${p.opportunitiesQualified === 1 ? "y" : "ies"}` : ""}
       </p>
 
       {isCompletedWithWarnings && (
         <p className="mt-2 text-sm text-ink/50">A few steps didn&rsquo;t finish, but the results below are real and safe to use.</p>
       )}
 
-      {(status === "completed" || status === "completed_with_warnings") && data.preview && (
-        <div className="mt-4 rounded-xl border border-ink/8 bg-paper/70 p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-display text-base font-medium text-ink">{data.preview.name ?? "Unnamed entity"}</span>
-            {data.preview.partnerType && (
-              <span className="font-mono-label rounded-full bg-lime/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-ink/70">
-                {data.preview.partnerType}
-              </span>
-            )}
-            <span className="font-mono-label rounded-full bg-ink/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-ink/50">
-              Evidence: {data.preview.evidenceConfidence}
-            </span>
-          </div>
-          <p className="mt-2 text-sm text-ink/60">
-            {humanizeDirection(data.preview.relationshipDirection)} · {data.preview.geographicFit.replace(/_/g, " ")} market fit · Partnra Fit{" "}
-            {data.preview.partnraFit}
-          </p>
-          {data.preview.potentialRelationship && <p className="mt-2 text-sm text-ink/70">{data.preview.potentialRelationship}</p>}
-          <div className="mt-3 flex flex-wrap gap-3 text-sm">
-            {data.preview.applicationUrl && (
-              <a href={data.preview.applicationUrl} target="_blank" rel="noreferrer" className="font-semibold text-ink underline underline-offset-4">
-                View application route
-              </a>
-            )}
-            {data.preview.contact && <span className="text-ink/55">Contact: {data.preview.contact}</span>}
-          </div>
+      {isTerminal && status !== "failed" && (
+        <div className="mt-4">
+          {p.opportunitiesQualified === 0 && !resultsLoading && (
+            <p className="text-sm text-ink/55">
+              Deep Discovery finished but didn&rsquo;t find a strong enough opportunity to show yet -- precision over padding.
+            </p>
+          )}
+
+          {p.opportunitiesQualified > 0 && (
+            <>
+              <p className="font-mono-label text-[11px] font-semibold uppercase tracking-[0.16em] text-ink/40">Top opportunities</p>
+              <div className="mt-3 flex flex-col gap-3">
+                {results.map((item) => (
+                  <OpportunityResultCard key={item.entityId} item={item} />
+                ))}
+              </div>
+              {resultsError && results.length === 0 && (
+                <p className="mt-3 text-sm text-ink/55">Couldn&rsquo;t load results just now -- still safely persisted, try refreshing.</p>
+              )}
+              {(resultsHasMore || resultsLoading) && (
+                <button
+                  type="button"
+                  onClick={loadMoreResults}
+                  disabled={resultsLoading}
+                  className="font-mono-label mt-4 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink/60 underline underline-offset-4 disabled:opacity-50"
+                >
+                  {resultsLoading ? "Loading..." : "Load more"}
+                </button>
+              )}
+            </>
+          )}
         </div>
-      )}
-
-      {(status === "completed" || status === "completed_with_warnings") && !data.preview && (
-        <p className="mt-3 text-sm text-ink/55">
-          Deep Discovery finished but didn&rsquo;t find a strong enough opportunity to preview yet -- precision over padding.
-        </p>
-      )}
-
-      {(status === "completed" || status === "completed_with_warnings") && data.additionalOpportunityCount > 0 && (
-        <p className="font-mono-label mt-3 text-[11px] uppercase tracking-[0.1em] text-ink/40">
-          +{data.additionalOpportunityCount} more qualified opportunit{data.additionalOpportunityCount === 1 ? "y" : "ies"} found
-        </p>
       )}
     </div>
   );

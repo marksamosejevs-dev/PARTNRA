@@ -316,6 +316,148 @@ export async function getOpportunitiesForBusiness(
   return (data ?? []) as unknown as OpportunityWithEntity[];
 }
 
+/**
+ * Cheap count-only query (`head: true` -- no rows transferred) for a
+ * business's real, user-facing qualified opportunity count: quality_tier
+ * != 'weak', same bar the results list itself uses. This is what the
+ * lightweight status/progress endpoint polls, instead of fetching every
+ * opportunity row just to count them -- `scans.opportunity_count` (see
+ * migration 0006's comments) is a raw upsert counter that includes weak
+ * tier and must never be labeled "qualified" to the user; this is the
+ * actual qualified count.
+ */
+export async function countQualifiedOpportunities(businessId: string): Promise<number> {
+  const supabase = getGraphClient();
+  const { count, error } = await supabase
+    .from("opportunities")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .neq("status", "rejected")
+    .neq("quality_tier", "weak");
+  if (error) throw new GraphError(`countQualifiedOpportunities: ${error.message}`);
+  return count ?? 0;
+}
+
+export interface QualifiedOpportunityItem {
+  entityId: string;
+  name: string;
+  partnerType: string | null;
+  partnraFit: number;
+  geographicFit: string;
+  relationshipDirection: string;
+  evidenceConfidence: string;
+  qualityTier: string;
+  potentialRelationship: string | null;
+  applicationUrl: string | null;
+  contact: string | null;
+  /** Distinct comparable brand names this entity has a real, evidenced relationship with -- the same distinct-brand set fitV2.ts's crossBrandBonus rewards, just surfaced here as names instead of only a count. */
+  comparableBrands: string[];
+  crossBrandCount: number;
+  /** One representative evidence link for this entity (most recently discovered) -- honest about being a sample, not an exhaustive evidence list. */
+  evidenceUrl: string | null;
+  sourcePlatform: string | null;
+}
+
+/**
+ * A real, ranked page of qualified opportunities -- ordered by Partnra Fit
+ * descending, the existing ranking (never recomputed or reordered here).
+ * Fetches `limit + 1` rows to derive `hasMore` without a separate COUNT
+ * query, then batches the brand-corroboration and representative-evidence
+ * lookups for the whole page into two queries total (never one query per
+ * row -- see the N+1 concern this was explicitly built to avoid).
+ */
+export async function getQualifiedOpportunitiesPage(
+  businessId: string,
+  opts: { limit: number; offset: number }
+): Promise<{ items: QualifiedOpportunityItem[]; hasMore: boolean }> {
+  const supabase = getGraphClient();
+  const { limit, offset } = opts;
+
+  const { data, error } = await supabase
+    .from("opportunities")
+    .select("*, entities(*)")
+    .eq("business_id", businessId)
+    .neq("status", "rejected")
+    .neq("quality_tier", "weak")
+    .order("partnra_fit", { ascending: false })
+    .range(offset, offset + limit); // one extra row -> hasMore, no separate count query
+  if (error) throw new GraphError(`getQualifiedOpportunitiesPage: ${error.message}`);
+
+  const rows = (data ?? []) as unknown as OpportunityWithEntity[];
+  const hasMore = rows.length > limit;
+  const page = rows.slice(0, limit);
+  if (page.length === 0) return { items: [], hasMore: false };
+
+  const entityIds = page.map((o) => o.entity_id);
+
+  const [brandRows, evidenceRows] = await Promise.all([
+    supabase
+      .from("relationships")
+      .select("source_entity_id, target_brand_id, brands(name)")
+      .in("source_entity_id", entityIds)
+      .not("target_brand_id", "is", null),
+    supabase
+      .from("evidence")
+      .select("entity_id, url, source_platform, discovered_at")
+      .in("entity_id", entityIds)
+      .order("discovered_at", { ascending: false }),
+  ]);
+  if (brandRows.error) throw new GraphError(`getQualifiedOpportunitiesPage (brands): ${brandRows.error.message}`);
+  if (evidenceRows.error) throw new GraphError(`getQualifiedOpportunitiesPage (evidence): ${evidenceRows.error.message}`);
+
+  // Keyed by brand id (not name) -- the true distinct-brand identity fitV2.ts's
+  // countDistinctBrandsForEntity itself counts by, so this stays numerically
+  // consistent with the Partnra Fit that was already computed for this entity.
+  const brandsByEntity = new Map<string, Map<string, string>>();
+  for (const row of (brandRows.data ?? []) as unknown as Array<{
+    source_entity_id: string;
+    target_brand_id: string | null;
+    brands: { name: string } | null;
+  }>) {
+    if (!row.target_brand_id || !row.brands?.name) continue;
+    const forEntity = brandsByEntity.get(row.source_entity_id) ?? new Map<string, string>();
+    forEntity.set(row.target_brand_id, row.brands.name);
+    brandsByEntity.set(row.source_entity_id, forEntity);
+  }
+
+  // Rows arrived ordered by discovered_at desc, so the first one seen per
+  // entity is the most recent -- a real, honest "representative" sample,
+  // not a claim that it's the specific evidence behind every listed brand.
+  const evidenceByEntity = new Map<string, { url: string; source_platform: string | null }>();
+  for (const row of (evidenceRows.data ?? []) as unknown as Array<{
+    entity_id: string | null;
+    url: string;
+    source_platform: string | null;
+  }>) {
+    if (!row.entity_id || evidenceByEntity.has(row.entity_id)) continue;
+    evidenceByEntity.set(row.entity_id, { url: row.url, source_platform: row.source_platform });
+  }
+
+  const items: QualifiedOpportunityItem[] = page.map((o) => {
+    const brands = Array.from((brandsByEntity.get(o.entity_id) ?? new Map()).values());
+    const evidence = evidenceByEntity.get(o.entity_id) ?? null;
+    return {
+      entityId: o.entity_id,
+      name: o.entities.name,
+      partnerType: o.partner_type,
+      partnraFit: o.partnra_fit,
+      geographicFit: o.geographic_fit,
+      relationshipDirection: o.relationship_direction,
+      evidenceConfidence: o.evidence_confidence,
+      qualityTier: o.quality_tier,
+      potentialRelationship: o.potential_relationship,
+      applicationUrl: o.entities.application_url,
+      contact: o.entities.public_contact,
+      comparableBrands: brands,
+      crossBrandCount: brands.length,
+      evidenceUrl: evidence?.url ?? null,
+      sourcePlatform: evidence?.source_platform ?? null,
+    };
+  });
+
+  return { items, hasMore };
+}
+
 // ------------------------------------------------------------------- scans
 
 export async function createScan(input: {
