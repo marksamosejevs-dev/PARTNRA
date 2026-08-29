@@ -11,6 +11,7 @@ import { DEEP_DISCOVERY_LIMITS } from "./limits";
 import {
   claimNextJob,
   reclaimStaleJobs,
+  reclaimOrphanScans,
   completeDiscoveryJob,
   failJob,
   JobCounterDeltas,
@@ -430,11 +431,31 @@ async function reclaimStaleWork(): Promise<{ requeuedCount: number; failedCount:
   }
 }
 
-/** One bounded worker tick -- reclaims any stale jobs, then drains up to maxJobs jobs, then returns. Called by the Netlify Scheduled Function (and safe to call from anywhere else that wants to nudge the queue, e.g. a manual "check now" trigger). */
+/**
+ * Self-healing step for orphaned Deep Discovery scans (see
+ * reclaim_orphan_scans, migration 0010) -- a scan whose initial job
+ * creation failed after the scan row itself was already created has zero
+ * discovery_jobs rows, so nothing else will ever touch it. Same
+ * best-effort try/catch shape as reclaimStaleWork: a transient RPC hiccup
+ * here must never stop the normal claim-and-process loop below it.
+ */
+async function reclaimOrphanScanWork(): Promise<{ failedCount: number }> {
+  try {
+    const result = await reclaimOrphanScans(DEEP_DISCOVERY_LIMITS.orphanScanLeaseSeconds);
+    return { failedCount: result.failedCount };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(JSON.stringify({ stage: "deep_discovery_orphan_scan_reclaim", error: message }));
+    return { failedCount: 0 };
+  }
+}
+
+/** One bounded worker tick -- reclaims any stale jobs and orphaned scans, then drains up to maxJobs jobs, then returns. Called by the Netlify Scheduled Function (and safe to call from anywhere else that wants to nudge the queue, e.g. a manual "check now" trigger). */
 export async function runWorkerTick(
   maxJobs: number = DEEP_DISCOVERY_LIMITS.maxJobsPerWorkerTick
-): Promise<{ jobsProcessed: number; staleRequeued: number; staleFailed: number }> {
+): Promise<{ jobsProcessed: number; staleRequeued: number; staleFailed: number; orphanScansFailed: number }> {
   const stale = await reclaimStaleWork();
+  const orphanScans = await reclaimOrphanScanWork();
 
   let jobsProcessed = 0;
   for (let i = 0; i < maxJobs; i++) {
@@ -442,5 +463,5 @@ export async function runWorkerTick(
     if (!result.processed) break;
     jobsProcessed++;
   }
-  return { jobsProcessed, staleRequeued: stale.requeuedCount, staleFailed: stale.failedCount };
+  return { jobsProcessed, staleRequeued: stale.requeuedCount, staleFailed: stale.failedCount, orphanScansFailed: orphanScans.failedCount };
 }

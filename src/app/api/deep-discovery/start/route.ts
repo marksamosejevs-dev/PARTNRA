@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeBrandUrl } from "@/lib/discovery/domain";
 import { isGraphConfigured } from "@/lib/graph/client";
-import { getBusinessByDomain, createScan, createDiscoveryJobs } from "@/lib/graph/repository";
+import { getBusinessByDomain, createScan, createDiscoveryJobs, updateScan } from "@/lib/graph/repository";
 
 function errorResponse(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
@@ -55,7 +55,26 @@ export async function POST(request: NextRequest) {
     }
 
     const scan = await createScan({ businessId: business.id, scanType: "deep" });
-    await createDiscoveryJobs([{ scanId: scan.id, jobType: "comparable_brand_expansion" }]);
+
+    try {
+      await createDiscoveryJobs([{ scanId: scan.id, jobType: "comparable_brand_expansion" }]);
+    } catch (jobErr) {
+      // The scan row above is already durably committed -- if its initial
+      // job never gets created, nothing else will ever touch this scan
+      // (the worker only ever reacts to discovery_jobs rows, never scans
+      // rows directly), leaving it orphaned in 'queued' forever. Mark it
+      // honestly failed right now rather than silently leaving that to the
+      // next worker tick's reclaim_orphan_scans safety net (migration
+      // 0010) -- this best-effort update failing too is not fatal, since
+      // that safety net still catches it within one lease window either way.
+      const message = jobErr instanceof Error ? jobErr.message : String(jobErr);
+      try {
+        await updateScan(scan.id, { status: "failed", completed_at: new Date().toISOString(), error: message });
+      } catch {
+        // Best-effort only -- the real error is already about to be returned below.
+      }
+      throw jobErr;
+    }
 
     return NextResponse.json({ scanId: scan.id, status: scan.status });
   } catch (err) {
