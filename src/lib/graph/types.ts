@@ -133,6 +133,8 @@ export interface ScanRow {
   business_id: string;
   scan_type: ScanType;
   status: ScanStatus;
+  /** Always set, unlike started_at (which stays null until the scan's first job actually runs) -- see migration 0010. The right column to order "latest scan" queries by. */
+  created_at: string;
   started_at: string | null;
   completed_at: string | null;
   raw_signal_count: number;

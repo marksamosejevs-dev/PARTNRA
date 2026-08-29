@@ -46,4 +46,13 @@ export const DEEP_DISCOVERY_LIMITS = {
    * dying, never requiring manual intervention.
    */
   staleJobLeaseSeconds: 300,
+  /**
+   * A Deep Discovery scan left 'queued' with zero discovery_jobs rows for
+   * longer than this is assumed orphaned (see reclaim_orphan_scans,
+   * migration 0010) -- its initial job creation failed and nothing else
+   * will ever pick it up. Deliberately well beyond any realistic in-flight
+   * /api/deep-discovery/start request duration, so this can never race a
+   * request that's still genuinely in progress.
+   */
+  orphanScanLeaseSeconds: 180,
 } as const;

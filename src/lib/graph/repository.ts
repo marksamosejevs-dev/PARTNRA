@@ -641,6 +641,30 @@ export async function reclaimStaleJobs(staleAfterSeconds: number, maxAttempts: n
   };
 }
 
+export interface OrphanScanReclaimResult {
+  failedCount: number;
+  failedScanIds: string[];
+}
+
+/**
+ * A 'queued' scan older than the lease with ZERO discovery_jobs rows is
+ * assumed orphaned -- its initial job creation never happened (see
+ * reclaim_orphan_scans in supabase/migrations/0010_orphan_scan_recovery.sql
+ * for the exact mechanism: /api/deep-discovery/start's scan-then-job
+ * creation is two separate network round-trips, and the second one
+ * failing leaves the scan row behind forever with nothing left to ever
+ * pick it up). Called once per worker tick, same lease-model shape as
+ * reclaimStaleJobs, so an orphaned scan is caught and honestly marked
+ * 'failed' automatically within one lease window.
+ */
+export async function reclaimOrphanScans(staleAfterSeconds: number): Promise<OrphanScanReclaimResult> {
+  const supabase = getGraphClient();
+  const { data, error } = await supabase.rpc("reclaim_orphan_scans", { p_stale_after_seconds: staleAfterSeconds }).single();
+  if (error) throw new GraphError(`reclaimOrphanScans: ${error.message}`);
+  const row = data as { failed_count: number; failed_scan_ids: string[] | null };
+  return { failedCount: row.failed_count, failedScanIds: row.failed_scan_ids ?? [] };
+}
+
 /** Bounds cost per Section 35/35 (max entity expansions / contact enrichments per scan) -- checked before enqueueing another job of this type, never after. */
 export async function countJobsByType(scanId: string, jobType: DiscoveryJobType): Promise<number> {
   const supabase = getGraphClient();
